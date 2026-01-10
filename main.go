@@ -43,6 +43,10 @@ func Run(args []string, w io.Writer) error {
 		return cmdReady(w)
 	case "dep":
 		return cmdDep(cmdArgs, w)
+	case "export":
+		return cmdExport(cmdArgs, w)
+	case "import":
+		return cmdImport(cmdArgs, w)
 	case "help", "-h", "--help":
 		printHelp(w)
 		return nil
@@ -64,6 +68,8 @@ Commands:
   ready                 List unblocked work
   dep add <id> <dep-id> Add dependency (id blocked by dep-id)
   dep rm <id> <dep-id>  Remove dependency
+  export [file]         Export all issues to JSONL (stdout or file)
+  import <file>         Import issues from JSONL file
 
 Update flags:
   --title <string>      New title
@@ -365,5 +371,50 @@ func cmdDepRm(args []string, w io.Writer) error {
 	}
 
 	fmt.Fprintf(w, "Removed dependency: %s no longer blocked by %s\n", issueID, dependsOnID)
+	return nil
+}
+
+// cmdExport exports all issues to JSONL format
+func cmdExport(args []string, w io.Writer) error {
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	// If file argument provided, write to file
+	if len(args) > 0 {
+		filePath := args[0]
+		if err := ExportToFile(store, filePath); err != nil {
+			return fmt.Errorf("export failed: %w", err)
+		}
+		fmt.Fprintf(w, "Exported to %s\n", filePath)
+		return nil
+	}
+
+	// Otherwise write to stdout
+	return ExportToJSONL(store, w)
+}
+
+// cmdImport imports issues from a JSONL file
+func cmdImport(args []string, w io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: bl import <file>")
+	}
+
+	filePath := args[0]
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	stats, err := ImportFromFile(store, filePath)
+	if err != nil {
+		return fmt.Errorf("import failed: %w", err)
+	}
+
+	fmt.Fprintf(w, "Imported: %d created, %d updated\n", stats.Created, stats.Updated)
 	return nil
 }

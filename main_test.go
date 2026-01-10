@@ -413,6 +413,155 @@ func TestCLI_NoInit(t *testing.T) {
 	}
 }
 
+func TestCLI_Export_Stdout(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Export Test"})
+
+	out, err := runCLI([]string{"export"})
+	if err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	// Should output JSONL to stdout
+	if !strings.Contains(out, `"title":"Export Test"`) {
+		t.Errorf("expected JSON with title, got: %s", out)
+	}
+	if !strings.Contains(out, `"dependencies":[]`) {
+		t.Errorf("expected dependencies array, got: %s", out)
+	}
+}
+
+func TestCLI_Export_File(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "File Export Test"})
+
+	out, err := runCLI([]string{"export", "backup.jsonl"})
+	if err != nil {
+		t.Fatalf("export to file failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Exported to backup.jsonl") {
+		t.Errorf("expected confirmation message, got: %s", out)
+	}
+
+	// Verify file exists and has content
+	data, err := os.ReadFile("backup.jsonl")
+	if err != nil {
+		t.Fatalf("read backup file: %v", err)
+	}
+	if !strings.Contains(string(data), "File Export Test") {
+		t.Errorf("backup file should contain task title: %s", string(data))
+	}
+}
+
+func TestCLI_Import(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+
+	// Create JSONL file
+	content := `{"id":"bl-imp1","title":"Imported Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+	os.WriteFile("import.jsonl", []byte(content), 0644)
+
+	out, err := runCLI([]string{"import", "import.jsonl"})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	if !strings.Contains(out, "1 created") {
+		t.Errorf("expected '1 created' in output, got: %s", out)
+	}
+
+	// Verify issue exists
+	listOut, _ := runCLI([]string{"list"})
+	if !strings.Contains(listOut, "Imported Task") {
+		t.Errorf("imported task should appear in list: %s", listOut)
+	}
+}
+
+func TestCLI_Import_NoFile(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"import"})
+	if err == nil {
+		t.Error("import without file should fail")
+	}
+}
+
+// TestCLI_RoundTrip_Full is the acceptance test from the Phase 3 spec
+func TestCLI_RoundTrip_Full(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Setup: init, create tasks, add dependency
+	runCLI([]string{"init"})
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+	runCLI([]string{"dep", "add", idB, idA}) // B blocked by A
+
+	// Export to file
+	runCLI([]string{"export", "backup.jsonl"})
+
+	// Verify backup file content
+	backupData, _ := os.ReadFile("backup.jsonl")
+	if !strings.Contains(string(backupData), idA) {
+		t.Fatalf("backup should contain issue A ID")
+	}
+	if !strings.Contains(string(backupData), `"depends_on"`) {
+		t.Fatalf("backup should contain dependency info")
+	}
+
+	// Delete the database (simulating corruption recovery)
+	os.RemoveAll(".beads")
+
+	// Re-init and import
+	runCLI([]string{"init"})
+	importOut, err := runCLI([]string{"import", "backup.jsonl"})
+	if err != nil {
+		t.Fatalf("import after restore failed: %v", err)
+	}
+	if !strings.Contains(importOut, "2 created") {
+		t.Errorf("expected 2 issues created, got: %s", importOut)
+	}
+
+	// Verify ready shows Task A (not B which is blocked)
+	readyOut, _ := runCLI([]string{"ready"})
+	if !strings.Contains(readyOut, "Task A") {
+		t.Errorf("Task A should be ready: %s", readyOut)
+	}
+	if strings.Contains(readyOut, "Task B") {
+		t.Errorf("Task B should be blocked: %s", readyOut)
+	}
+
+	// Verify list shows both tasks
+	listOut, _ := runCLI([]string{"list"})
+	if !strings.Contains(listOut, "Task A") || !strings.Contains(listOut, "Task B") {
+		t.Errorf("list should show both tasks: %s", listOut)
+	}
+}
+
 // Helper functions
 
 // runCLI executes the CLI with the given args and returns stdout/stderr combined
