@@ -154,7 +154,7 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl create <title> [--description <text>] [--priority <int>] [--type <type>] [--blocked-by <id>]")
+		return errors.New("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>]")
 	}
 
 	title := strings.Join(remaining, " ")
@@ -376,7 +376,7 @@ func cmdShow(args []string, w io.Writer) error {
 // cmdUpdate modifies an existing issue
 func cmdUpdate(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bl update <id> [--title <title>] [--status <status>] [--priority <priority>] [--type <type>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
+		return errors.New("usage: bl update <id> [--title <text>] [--status <open|in_progress|closed>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
 	}
 
 	id := args[0]
@@ -405,6 +405,17 @@ func cmdUpdate(args []string, w io.Writer) error {
 	issue, err := store.GetIssue(id)
 	if err != nil {
 		return fmt.Errorf("issue %s: %w", id, err)
+	}
+
+	// Validate inputs before applying changes
+	if *status != "" && !Status(*status).Valid() {
+		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", *status)
+	}
+	if *priority >= 0 && *priority > 4 {
+		return fmt.Errorf("invalid priority: %d (valid: 0-4)", *priority)
+	}
+	if *issueType != "" && !IssueType(*issueType).Valid() {
+		return fmt.Errorf("invalid type: %q (valid: task, bug, feature, epic)", *issueType)
 	}
 
 	if *title != "" {

@@ -335,6 +335,105 @@ func TestImportFromFile(t *testing.T) {
 	}
 }
 
+func TestRoundTrip_DescriptionAndResolution(t *testing.T) {
+	// Test that description and resolution fields survive export/import
+	store1, cleanup1 := setupTestStore(t)
+	defer cleanup1()
+
+	now := time.Now()
+	closedAt := now
+
+	// Issue with description
+	issueWithDesc := &Issue{
+		ID:          "bl-desc1",
+		Title:       "Has Description",
+		Description: "This is a detailed description\nwith multiple lines",
+		Status:      StatusOpen,
+		Priority:    2,
+		Type:        IssueTypeTask,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	// Closed issue with resolution
+	closedIssue := &Issue{
+		ID:         "bl-closed1",
+		Title:      "Closed Issue",
+		Status:     StatusClosed,
+		Priority:   1,
+		Type:       IssueTypeBug,
+		Resolution: ResolutionWontfix,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		ClosedAt:   &closedAt,
+	}
+
+	// Another closed with different resolution
+	closedDupe := &Issue{
+		ID:         "bl-closed2",
+		Title:      "Duplicate Issue",
+		Status:     StatusClosed,
+		Priority:   3,
+		Type:       IssueTypeTask,
+		Resolution: ResolutionDuplicate,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		ClosedAt:   &closedAt,
+	}
+
+	for _, issue := range []*Issue{issueWithDesc, closedIssue, closedDupe} {
+		if err := store1.CreateIssue(issue); err != nil {
+			t.Fatalf("CreateIssue: %v", err)
+		}
+	}
+
+	// Export
+	var buf bytes.Buffer
+	if err := ExportToJSONL(store1, &buf); err != nil {
+		t.Fatalf("ExportToJSONL: %v", err)
+	}
+
+	// Import into fresh store
+	store2, cleanup2 := setupTestStore(t)
+	defer cleanup2()
+
+	reader := strings.NewReader(buf.String())
+	_, err := ImportFromJSONL(store2, reader)
+	if err != nil {
+		t.Fatalf("ImportFromJSONL: %v", err)
+	}
+
+	// Verify description preserved
+	gotDesc, err := store2.GetIssue("bl-desc1")
+	if err != nil {
+		t.Fatalf("GetIssue(bl-desc1): %v", err)
+	}
+	if gotDesc.Description != issueWithDesc.Description {
+		t.Errorf("Description not preserved: got %q, want %q", gotDesc.Description, issueWithDesc.Description)
+	}
+
+	// Verify resolution preserved for wontfix
+	gotWontfix, err := store2.GetIssue("bl-closed1")
+	if err != nil {
+		t.Fatalf("GetIssue(bl-closed1): %v", err)
+	}
+	if gotWontfix.Resolution != ResolutionWontfix {
+		t.Errorf("Resolution not preserved: got %q, want %q", gotWontfix.Resolution, ResolutionWontfix)
+	}
+	if gotWontfix.Status != StatusClosed {
+		t.Errorf("Status not preserved: got %q, want %q", gotWontfix.Status, StatusClosed)
+	}
+
+	// Verify resolution preserved for duplicate
+	gotDupe, err := store2.GetIssue("bl-closed2")
+	if err != nil {
+		t.Fatalf("GetIssue(bl-closed2): %v", err)
+	}
+	if gotDupe.Resolution != ResolutionDuplicate {
+		t.Errorf("Resolution not preserved: got %q, want %q", gotDupe.Resolution, ResolutionDuplicate)
+	}
+}
+
 func setupTestStore(t *testing.T) (*Store, func()) {
 	store, err := NewStore(":memory:")
 	if err != nil {

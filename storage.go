@@ -106,10 +106,10 @@ func (s *Store) CreateIssue(issue *Issue) error {
 	}
 
 	if _, err := s.db.Exec(`
-		INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.Type,
-		issue.CreatedAt, issue.UpdatedAt); err != nil {
+		issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution); err != nil {
 		return fmt.Errorf("insert issue: %w", err)
 	}
 	return nil

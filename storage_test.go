@@ -1,6 +1,7 @@
 package beadslite
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -258,6 +259,183 @@ func TestStoreGetReadyWorkWithParentChild(t *testing.T) {
 	ready, _ = store.GetReadyWork()
 	if len(ready) != 3 {
 		t.Errorf("After closing blocker, got %d ready, want 3", len(ready))
+	}
+}
+
+func TestStoreRemoveDependencyNonExistent(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issueA := NewIssue("Issue A")
+	issueB := NewIssue("Issue B")
+	store.CreateIssue(issueA)
+	store.CreateIssue(issueB)
+
+	// Remove a dependency that was never added
+	// This documents current behavior: silent success (DELETE affects 0 rows)
+	err := store.RemoveDependency(issueA.ID, issueB.ID, DepBlocks)
+	if err != nil {
+		t.Errorf("RemoveDependency() on non-existent dep should not error: %v", err)
+	}
+
+	// Also test with non-existent issue IDs
+	err = store.RemoveDependency("bl-nonexistent", issueB.ID, DepBlocks)
+	if err != nil {
+		t.Errorf("RemoveDependency() with non-existent issue_id should not error: %v", err)
+	}
+}
+
+func TestStoreUpdateIssueNonExistent(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Create an issue object without storing it
+	issue := NewIssue("Non-existent Issue")
+
+	// Update should succeed (SQL UPDATE affects 0 rows, which is not an error)
+	// This documents current behavior: silent success on non-existent ID
+	err := store.UpdateIssue(issue)
+	if err != nil {
+		t.Errorf("UpdateIssue() on non-existent ID should not error: %v", err)
+	}
+
+	// Verify issue was NOT created (update doesn't insert)
+	_, err = store.GetIssue(issue.ID)
+	if err == nil {
+		t.Error("GetIssue() should fail for non-existent issue")
+	}
+}
+
+func TestStoreRemoveAllDependencies(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Create issues
+	issueA := NewIssue("Issue A")
+	issueB := NewIssue("Issue B")
+	issueC := NewIssue("Issue C")
+	store.CreateIssue(issueA)
+	store.CreateIssue(issueB)
+	store.CreateIssue(issueC)
+
+	// Add multiple dependencies to A
+	store.AddDependency(issueA.ID, issueB.ID, DepBlocks)
+	store.AddDependency(issueA.ID, issueC.ID, DepBlocks)
+	store.AddDependency(issueA.ID, issueB.ID, DepParentChild)
+
+	// Verify A has 3 dependencies
+	deps, _ := store.GetDependencies(issueA.ID)
+	if len(deps) != 3 {
+		t.Fatalf("Before removal: got %d deps, want 3", len(deps))
+	}
+
+	// Remove all dependencies for A
+	err := store.RemoveAllDependencies(issueA.ID)
+	if err != nil {
+		t.Fatalf("RemoveAllDependencies() error = %v", err)
+	}
+
+	// Verify A has no dependencies
+	deps, _ = store.GetDependencies(issueA.ID)
+	if len(deps) != 0 {
+		t.Errorf("After removal: got %d deps, want 0", len(deps))
+	}
+
+	// Verify issue A still exists
+	issue, err := store.GetIssue(issueA.ID)
+	if err != nil {
+		t.Errorf("Issue should still exist after removing deps: %v", err)
+	}
+	if issue.ID != issueA.ID {
+		t.Errorf("Issue ID = %q, want %q", issue.ID, issueA.ID)
+	}
+}
+
+func TestStoreGetAllDependencies(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Create issues
+	issueA := NewIssue("Issue A")
+	issueB := NewIssue("Issue B")
+	issueC := NewIssue("Issue C")
+	store.CreateIssue(issueA)
+	store.CreateIssue(issueB)
+	store.CreateIssue(issueC)
+
+	// Add dependencies: A blocked by B, A blocked by C, B blocked by C
+	store.AddDependency(issueA.ID, issueB.ID, DepBlocks)
+	store.AddDependency(issueA.ID, issueC.ID, DepBlocks)
+	store.AddDependency(issueB.ID, issueC.ID, DepBlocks)
+
+	// Get all dependencies
+	allDeps, err := store.GetAllDependencies()
+	if err != nil {
+		t.Fatalf("GetAllDependencies() error = %v", err)
+	}
+
+	// Verify map structure
+	if len(allDeps) != 2 {
+		t.Errorf("GetAllDependencies() returned %d issue keys, want 2 (A and B)", len(allDeps))
+	}
+
+	// Verify A has 2 deps
+	if len(allDeps[issueA.ID]) != 2 {
+		t.Errorf("Issue A has %d deps, want 2", len(allDeps[issueA.ID]))
+	}
+
+	// Verify B has 1 dep
+	if len(allDeps[issueB.ID]) != 1 {
+		t.Errorf("Issue B has %d deps, want 1", len(allDeps[issueB.ID]))
+	}
+
+	// Verify C has no deps (should not be in map)
+	if _, exists := allDeps[issueC.ID]; exists {
+		t.Errorf("Issue C should not be in deps map (it has no deps)")
+	}
+}
+
+func TestStoreWithTransactionRollback(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Original Issue")
+	store.CreateIssue(issue)
+
+	// Execute transaction that creates an issue then fails
+	testErr := fmt.Errorf("intentional test failure")
+	err := store.WithTransaction(func() error {
+		// Create another issue inside transaction
+		newIssue := NewIssue("Transaction Issue")
+		if err := store.CreateIssue(newIssue); err != nil {
+			return err
+		}
+
+		// Update existing issue
+		issue.Title = "Modified Title"
+		if err := store.UpdateIssue(issue); err != nil {
+			return err
+		}
+
+		// Return error to trigger rollback
+		return testErr
+	})
+
+	// Should return the test error
+	if err != testErr {
+		t.Errorf("WithTransaction() error = %v, want %v", err, testErr)
+	}
+
+	// Verify only 1 issue exists (transaction issue was rolled back)
+	issues, _ := store.ListIssues()
+	if len(issues) != 1 {
+		t.Errorf("After rollback: got %d issues, want 1", len(issues))
+	}
+
+	// Verify original issue title was NOT modified (rolled back)
+	got, _ := store.GetIssue(issue.ID)
+	if got.Title != "Original Issue" {
+		t.Errorf("Title = %q, want %q (should be rolled back)", got.Title, "Original Issue")
 	}
 }
 
