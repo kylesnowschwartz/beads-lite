@@ -102,9 +102,9 @@ func ExportToFile(store *Store, path string) error {
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer f.Close()
 
 	if err := ExportToJSONL(store, f); err != nil {
+		f.Close()
 		return err
 	}
 

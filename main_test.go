@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -535,11 +534,6 @@ func extractID(output string) string {
 		}
 	}
 	return ""
-}
-
-// dbPath returns the database path for the current directory
-func dbPath() string {
-	return filepath.Join(".beads-lite", "beads.db")
 }
 
 // Tests for --json flag (Phase 4)
