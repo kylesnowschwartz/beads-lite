@@ -592,3 +592,209 @@ func extractID(output string) string {
 func dbPath() string {
 	return filepath.Join(".beads", "beads.db")
 }
+
+// Tests for --json flag (Phase 4)
+
+func TestCLI_List_JSON(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "JSON Task"})
+
+	out, err := runCLI([]string{"list", "--json"})
+	if err != nil {
+		t.Fatalf("list --json failed: %v", err)
+	}
+
+	// Should be valid JSONL (one JSON object per line)
+	if !strings.Contains(out, `"title":"JSON Task"`) {
+		t.Errorf("expected JSON with title, got: %s", out)
+	}
+	if !strings.Contains(out, `"id":"bl-`) {
+		t.Errorf("expected JSON with id, got: %s", out)
+	}
+	if !strings.Contains(out, `"status":"open"`) {
+		t.Errorf("expected JSON with status, got: %s", out)
+	}
+}
+
+func TestCLI_Ready_JSON(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Ready JSON Task"})
+
+	out, err := runCLI([]string{"ready", "--json"})
+	if err != nil {
+		t.Fatalf("ready --json failed: %v", err)
+	}
+
+	// Should be valid JSONL
+	if !strings.Contains(out, `"title":"Ready JSON Task"`) {
+		t.Errorf("expected JSON with title, got: %s", out)
+	}
+}
+
+func TestCLI_Show_JSON(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Show JSON Task"})
+	id := extractID(createOut)
+
+	out, err := runCLI([]string{"show", id, "--json"})
+	if err != nil {
+		t.Fatalf("show --json failed: %v", err)
+	}
+
+	// Should be a single JSON object
+	if !strings.Contains(out, `"title":"Show JSON Task"`) {
+		t.Errorf("expected JSON with title, got: %s", out)
+	}
+	if !strings.Contains(out, `"id":"`+id+`"`) {
+		t.Errorf("expected JSON with correct id, got: %s", out)
+	}
+}
+
+// Tests for --tree flag (Phase 4)
+
+func TestCLI_List_Tree(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outA, _ := runCLI([]string{"create", "Parent Task"})
+	outB, _ := runCLI([]string{"create", "Child Task"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+
+	// B blocked by A (A is parent, B is child in tree)
+	runCLI([]string{"dep", "add", idB, idA})
+
+	out, err := runCLI([]string{"list", "--tree"})
+	if err != nil {
+		t.Fatalf("list --tree failed: %v", err)
+	}
+
+	// Should show tree structure with box-drawing characters
+	// Parent should appear, child should be indented under it
+	if !strings.Contains(out, "Parent Task") {
+		t.Errorf("expected 'Parent Task' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Child Task") {
+		t.Errorf("expected 'Child Task' in output, got: %s", out)
+	}
+	// Should have tree drawing characters
+	if !strings.Contains(out, "└──") && !strings.Contains(out, "├──") {
+		t.Errorf("expected tree drawing characters, got: %s", out)
+	}
+}
+
+func TestCLI_List_Tree_MultipleRoots(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Root One"})
+	runCLI([]string{"create", "Root Two"})
+
+	out, err := runCLI([]string{"list", "--tree"})
+	if err != nil {
+		t.Fatalf("list --tree failed: %v", err)
+	}
+
+	// Both roots should appear at the top level (no indentation prefix)
+	if !strings.Contains(out, "Root One") {
+		t.Errorf("expected 'Root One' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Root Two") {
+		t.Errorf("expected 'Root Two' in output, got: %s", out)
+	}
+}
+
+func TestCLI_List_Tree_Chain(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	outC, _ := runCLI([]string{"create", "Task C"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+	idC := extractID(outC)
+
+	// C blocked by B, B blocked by A
+	runCLI([]string{"dep", "add", idB, idA})
+	runCLI([]string{"dep", "add", idC, idB})
+
+	out, err := runCLI([]string{"list", "--tree"})
+	if err != nil {
+		t.Fatalf("list --tree failed: %v", err)
+	}
+
+	// Should show: A -> B -> C hierarchy
+	if !strings.Contains(out, "Task A") {
+		t.Errorf("expected 'Task A' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Task B") {
+		t.Errorf("expected 'Task B' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Task C") {
+		t.Errorf("expected 'Task C' in output, got: %s", out)
+	}
+}
+
+// Tests for onboard command (Phase 5)
+
+func TestCLI_Onboard(t *testing.T) {
+	// onboard doesn't need init - it just prints instructions
+	out, err := runCLI([]string{"onboard"})
+	if err != nil {
+		t.Fatalf("onboard failed: %v", err)
+	}
+
+	// Should contain key elements
+	if !strings.Contains(out, "beads-lite") {
+		t.Errorf("expected 'beads-lite' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "bl ready") {
+		t.Errorf("expected 'bl ready' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "bl close") {
+		t.Errorf("expected 'bl close' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "--json") {
+		t.Errorf("expected '--json' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "--tree") {
+		t.Errorf("expected '--tree' in output, got: %s", out)
+	}
+}
+
+func TestCLI_Onboard_IsValidMarkdown(t *testing.T) {
+	out, err := runCLI([]string{"onboard"})
+	if err != nil {
+		t.Fatalf("onboard failed: %v", err)
+	}
+
+	// Should start with markdown header
+	if !strings.HasPrefix(out, "#") {
+		t.Errorf("expected markdown header at start, got: %s", out[:min(50, len(out))])
+	}
+}

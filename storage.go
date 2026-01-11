@@ -234,3 +234,25 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 	}
 	return issues, rows.Err()
 }
+
+// GetAllDependencies returns all dependencies in the database, keyed by issue_id.
+// Used for efficient tree building without N+1 queries.
+func (s *Store) GetAllDependencies() (map[string][]*Dependency, error) {
+	rows, err := s.db.Query(`
+		SELECT issue_id, depends_on_id, type, created_at
+		FROM dependencies`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]*Dependency)
+	for rows.Next() {
+		dep := &Dependency{}
+		if err := rows.Scan(&dep.IssueID, &dep.DependsOnID, &dep.Type, &dep.CreatedAt); err != nil {
+			return nil, err
+		}
+		result[dep.IssueID] = append(result[dep.IssueID], dep)
+	}
+	return result, rows.Err()
+}
