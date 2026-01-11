@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -17,6 +20,9 @@ const (
 	beadsDir = ".beads-lite"
 	dbName   = "beads.db"
 )
+
+// Version is set at build time via ldflags
+var Version = "dev"
 
 // Run executes the CLI with the given arguments and writes output to w.
 // This is the main entry point for the CLI, separated from main() for testing.
@@ -52,6 +58,10 @@ func Run(args []string, w io.Writer) error {
 		return cmdImport(cmdArgs, w)
 	case "onboard":
 		return cmdOnboard(w)
+	case "version", "-v", "--version":
+		return cmdVersion(w)
+	case "upgrade":
+		return cmdUpgrade(w)
 	case "help", "-h", "--help":
 		printHelp(w)
 		return nil
@@ -75,6 +85,8 @@ Commands:
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
   onboard               Print Claude Code integration instructions
+  version               Show version
+  upgrade               Upgrade to latest release
 
 List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
@@ -795,4 +807,121 @@ bl close <epic-id>
 `
 	fmt.Fprint(w, instructions)
 	return nil
+}
+
+func cmdVersion(w io.Writer) error {
+	fmt.Fprintf(w, "bl version %s\n", Version)
+	return nil
+}
+
+func cmdUpgrade(w io.Writer) error {
+	const repo = "kylesnowschwartz/beads-lite"
+
+	// Get latest release version
+	resp, err := http.Get("https://api.github.com/repos/" + repo + "/releases/latest")
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return fmt.Errorf("failed to parse release info: %w", err)
+	}
+
+	latest := release.TagName
+	if latest == Version {
+		fmt.Fprintf(w, "Already at latest version %s\n", Version)
+		return nil
+	}
+
+	fmt.Fprintf(w, "Upgrading from %s to %s...\n", Version, latest)
+
+	// Determine platform
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	tarball := fmt.Sprintf("beads-lite_%s_%s.tar.gz", goos, goarch)
+	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, latest, tarball)
+
+	// Download tarball
+	resp, err = http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	// Get current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Resolve symlinks to get real path
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve executable path: %w", err)
+	}
+
+	// Create temp file for tarball
+	tmpFile, err := os.CreateTemp("", "bl-upgrade-*.tar.gz")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	tmpFile.Close()
+
+	// Extract and replace
+	tmpDir, err := os.MkdirTemp("", "bl-upgrade-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Use tar command to extract (simpler than implementing tar in Go)
+	cmd := execCommand("tar", "-xzf", tmpFile.Name(), "-C", tmpDir)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to extract: %w", err)
+	}
+
+	// Replace executable
+	newBinary := filepath.Join(tmpDir, "bl")
+	if err := os.Rename(newBinary, execPath); err != nil {
+		// Try copy if rename fails (cross-device)
+		src, err := os.Open(newBinary)
+		if err != nil {
+			return fmt.Errorf("failed to open new binary: %w", err)
+		}
+		defer src.Close()
+
+		dst, err := os.OpenFile(execPath, os.O_WRONLY|os.O_TRUNC, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to open executable for writing: %w", err)
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, src); err != nil {
+			return fmt.Errorf("failed to write new binary: %w", err)
+		}
+	}
+
+	fmt.Fprintf(w, "Upgraded to %s\n", latest)
+	return nil
+}
+
+// execCommand wraps exec.Command for easier testing
+var execCommand = execCommandReal
+
+func execCommandReal(name string, args ...string) interface{ Run() error } {
+	return exec.Command(name, args...)
 }

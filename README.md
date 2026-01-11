@@ -49,6 +49,8 @@ Commands:
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
   onboard               Print Claude Code integration instructions
+  version               Show version
+  upgrade               Upgrade to latest release
 
 List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
