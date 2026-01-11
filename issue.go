@@ -48,6 +48,26 @@ func (t IssueType) Valid() bool {
 	}
 }
 
+// Resolution represents why an issue was closed.
+type Resolution string
+
+const (
+	ResolutionDone      Resolution = "done"      // work completed (default)
+	ResolutionWontfix   Resolution = "wontfix"   // intentionally rejected
+	ResolutionDuplicate Resolution = "duplicate" // duplicate of another issue
+)
+
+// Valid returns true if the resolution is a known valid resolution.
+// Empty string is valid (treated as "done" for backwards compatibility).
+func (r Resolution) Valid() bool {
+	switch r {
+	case "", ResolutionDone, ResolutionWontfix, ResolutionDuplicate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Issue represents a trackable work item with dependencies.
 type Issue struct {
 	ID          string     `json:"id"`
@@ -60,6 +80,7 @@ type Issue struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at,omitempty"`
+	Resolution  Resolution `json:"resolution,omitempty"`
 }
 
 // NewIssue creates a new issue with a hash-based ID and sensible defaults.
@@ -91,6 +112,9 @@ func (i *Issue) Validate() error {
 	}
 	if i.Priority < 0 || i.Priority > 4 {
 		return fmt.Errorf("priority must be 0-4, got %d", i.Priority)
+	}
+	if !i.Resolution.Valid() {
+		return fmt.Errorf("invalid resolution: %q", i.Resolution)
 	}
 	return nil
 }

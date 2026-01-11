@@ -1572,6 +1572,92 @@ func TestCLI_Close_AlreadyClosed(t *testing.T) {
 	}
 }
 
+// Resolution tests
+
+func TestCLI_Close_Resolution(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Test default resolution (done)
+	createOut1, _ := runCLI([]string{"create", "Task 1"})
+	id1 := extractID(createOut1)
+	runCLI([]string{"close", id1})
+	showOut1, _ := runCLI([]string{"show", id1})
+	if !strings.Contains(showOut1, "Resolution: done") {
+		t.Errorf("expected 'Resolution: done' in output, got: %s", showOut1)
+	}
+
+	// Test explicit wontfix resolution
+	createOut2, _ := runCLI([]string{"create", "Task 2"})
+	id2 := extractID(createOut2)
+	runCLI([]string{"close", id2, "--resolution", "wontfix"})
+	showOut2, _ := runCLI([]string{"show", id2})
+	if !strings.Contains(showOut2, "Resolution: wontfix") {
+		t.Errorf("expected 'Resolution: wontfix' in output, got: %s", showOut2)
+	}
+
+	// Test duplicate resolution
+	createOut3, _ := runCLI([]string{"create", "Task 3"})
+	id3 := extractID(createOut3)
+	runCLI([]string{"close", id3, "--resolution", "duplicate"})
+	showOut3, _ := runCLI([]string{"show", id3})
+	if !strings.Contains(showOut3, "Resolution: duplicate") {
+		t.Errorf("expected 'Resolution: duplicate' in output, got: %s", showOut3)
+	}
+}
+
+func TestCLI_Close_InvalidResolution(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"close", id, "--resolution", "invalid"})
+	if err == nil {
+		t.Error("expected error for invalid resolution")
+	}
+	if !strings.Contains(err.Error(), "invalid resolution") {
+		t.Errorf("expected 'invalid resolution' error, got: %v", err)
+	}
+}
+
+func TestCLI_List_FilterResolution(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create and close with different resolutions
+	createOut1, _ := runCLI([]string{"create", "Done Task"})
+	id1 := extractID(createOut1)
+	runCLI([]string{"close", id1, "--resolution", "done"})
+
+	createOut2, _ := runCLI([]string{"create", "Wontfix Task"})
+	id2 := extractID(createOut2)
+	runCLI([]string{"close", id2, "--resolution", "wontfix"})
+
+	createOut3, _ := runCLI([]string{"create", "Another Wontfix"})
+	id3 := extractID(createOut3)
+	runCLI([]string{"close", id3, "--resolution", "wontfix"})
+
+	// Filter by wontfix
+	out, _ := runCLI([]string{"list", "--status", "closed", "--resolution", "wontfix"})
+	if !strings.Contains(out, id2) || !strings.Contains(out, id3) {
+		t.Errorf("expected wontfix issues in output, got: %s", out)
+	}
+	if strings.Contains(out, id1) {
+		t.Errorf("done issue should not appear in wontfix filter, got: %s", out)
+	}
+
+	// Filter by done
+	out2, _ := runCLI([]string{"list", "--status", "closed", "--resolution", "done"})
+	if !strings.Contains(out2, id1) {
+		t.Errorf("expected done issue in output, got: %s", out2)
+	}
+	if strings.Contains(out2, id2) || strings.Contains(out2, id3) {
+		t.Errorf("wontfix issues should not appear in done filter, got: %s", out2)
+	}
+}
+
 // P2 Test Coverage: Update validation tests
 
 func TestCLI_Update_InvalidStatus(t *testing.T) {

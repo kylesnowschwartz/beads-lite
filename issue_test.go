@@ -76,6 +76,39 @@ func TestValidIssueType(t *testing.T) {
 	}
 }
 
+func TestResolutionConstants(t *testing.T) {
+	if ResolutionDone != "done" {
+		t.Errorf("ResolutionDone = %q, want %q", ResolutionDone, "done")
+	}
+	if ResolutionWontfix != "wontfix" {
+		t.Errorf("ResolutionWontfix = %q, want %q", ResolutionWontfix, "wontfix")
+	}
+	if ResolutionDuplicate != "duplicate" {
+		t.Errorf("ResolutionDuplicate = %q, want %q", ResolutionDuplicate, "duplicate")
+	}
+}
+
+func TestValidResolution(t *testing.T) {
+	tests := []struct {
+		resolution Resolution
+		want       bool
+	}{
+		{ResolutionDone, true},
+		{ResolutionWontfix, true},
+		{ResolutionDuplicate, true},
+		{"", true}, // empty is valid (backwards compat)
+		{"invalid", false},
+		{"wontdo", false}, // typo should fail
+	}
+
+	for _, tt := range tests {
+		got := tt.resolution.Valid()
+		if got != tt.want {
+			t.Errorf("Resolution(%q).Valid() = %v, want %v", tt.resolution, got, tt.want)
+		}
+	}
+}
+
 func TestNewIssue(t *testing.T) {
 	title := "Test Issue"
 	issue := NewIssue(title)
@@ -219,6 +252,50 @@ func TestIssueValidate(t *testing.T) {
 				Priority: 4,
 			},
 			wantErr: false,
+		},
+		{
+			name: "valid resolution done",
+			issue: Issue{
+				ID:         "bl-test",
+				Title:      "Valid Title",
+				Status:     StatusClosed,
+				Type:       IssueTypeTask,
+				Resolution: ResolutionDone,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid resolution wontfix",
+			issue: Issue{
+				ID:         "bl-test",
+				Title:      "Valid Title",
+				Status:     StatusClosed,
+				Type:       IssueTypeTask,
+				Resolution: ResolutionWontfix,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid resolution empty (backwards compat)",
+			issue: Issue{
+				ID:         "bl-test",
+				Title:      "Valid Title",
+				Status:     StatusClosed,
+				Type:       IssueTypeTask,
+				Resolution: "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid resolution",
+			issue: Issue{
+				ID:         "bl-test",
+				Title:      "Valid Title",
+				Status:     StatusClosed,
+				Type:       IssueTypeTask,
+				Resolution: "invalid",
+			},
+			wantErr: true,
 		},
 	}
 

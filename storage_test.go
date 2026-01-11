@@ -98,7 +98,7 @@ func TestStoreCloseIssue(t *testing.T) {
 	issue := NewIssue("Task to close")
 	store.CreateIssue(issue)
 
-	err := store.CloseIssue(issue.ID)
+	err := store.CloseIssue(issue.ID, ResolutionDone)
 	if err != nil {
 		t.Fatalf("CloseIssue() error = %v", err)
 	}
@@ -198,7 +198,7 @@ func TestStoreGetReadyWork(t *testing.T) {
 	}
 
 	// Close A, now B should be ready
-	store.CloseIssue(issueA.ID)
+	store.CloseIssue(issueA.ID, ResolutionDone)
 	ready, _ = store.GetReadyWork()
 	if len(ready) != 1 {
 		t.Fatalf("After closing A, got %d ready, want 1", len(ready))
@@ -208,7 +208,7 @@ func TestStoreGetReadyWork(t *testing.T) {
 	}
 
 	// Close B, now C should be ready
-	store.CloseIssue(issueB.ID)
+	store.CloseIssue(issueB.ID, ResolutionDone)
 	ready, _ = store.GetReadyWork()
 	if len(ready) != 1 {
 		t.Fatalf("After closing B, got %d ready, want 1", len(ready))
@@ -254,7 +254,7 @@ func TestStoreGetReadyWorkWithParentChild(t *testing.T) {
 	}
 
 	// Close blocker, now epic and both subtasks should be ready
-	store.CloseIssue(blocker.ID)
+	store.CloseIssue(blocker.ID, ResolutionDone)
 	ready, _ = store.GetReadyWork()
 	if len(ready) != 3 {
 		t.Errorf("After closing blocker, got %d ready, want 3", len(ready))

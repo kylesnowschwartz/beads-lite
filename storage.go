@@ -69,7 +69,8 @@ func (s *Store) initSchema() error {
 		issue_type TEXT NOT NULL DEFAULT 'task',
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
-		closed_at DATETIME
+		closed_at DATETIME,
+		resolution TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS dependencies (
@@ -118,10 +119,10 @@ func (s *Store) CreateIssue(issue *Issue) error {
 func (s *Store) GetIssue(id string) (*Issue, error) {
 	issue := &Issue{}
 	err := s.db.QueryRow(`
-		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at
+		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
 		FROM issues WHERE id = ?`, id).Scan(
 		&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority,
-		&issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt)
+		&issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution)
 
 	if err == sql.ErrNoRows {
 		return nil, ErrIssueNotFound
@@ -138,21 +139,21 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 	issue.UpdatedAt = time.Now()
 	if _, err := s.db.Exec(`
 		UPDATE issues SET title = ?, description = ?, status = ?, priority = ?,
-		issue_type = ?, updated_at = ?, closed_at = ?
+		issue_type = ?, updated_at = ?, closed_at = ?, resolution = ?
 		WHERE id = ?`,
 		issue.Title, issue.Description, issue.Status, issue.Priority,
-		issue.Type, issue.UpdatedAt, issue.ClosedAt, issue.ID); err != nil {
+		issue.Type, issue.UpdatedAt, issue.ClosedAt, issue.Resolution, issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	return nil
 }
 
-// CloseIssue marks an issue as closed.
-func (s *Store) CloseIssue(id string) error {
+// CloseIssue marks an issue as closed with the given resolution.
+func (s *Store) CloseIssue(id string, resolution Resolution) error {
 	now := time.Now()
 	if _, err := s.db.Exec(`
-		UPDATE issues SET status = ?, updated_at = ?, closed_at = ?
-		WHERE id = ?`, StatusClosed, now, now, id); err != nil {
+		UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, resolution = ?
+		WHERE id = ?`, StatusClosed, now, now, resolution, id); err != nil {
 		return fmt.Errorf("close issue: %w", err)
 	}
 	return nil
@@ -161,7 +162,7 @@ func (s *Store) CloseIssue(id string) error {
 // ListIssues returns all issues.
 func (s *Store) ListIssues() ([]*Issue, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at
+		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
 		FROM issues ORDER BY priority ASC, created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -225,7 +226,7 @@ func (s *Store) GetDependencies(issueID string) ([]*Dependency, error) {
 func (s *Store) GetReadyWork() ([]*Issue, error) {
 	query := `
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
-		       i.created_at, i.updated_at, i.closed_at
+		       i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, '')
 		FROM issues i
 		WHERE i.status IN ('open', 'in_progress')
 		AND i.id NOT IN (
@@ -264,7 +265,7 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 	for rows.Next() {
 		issue := &Issue{}
 		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status,
-			&issue.Priority, &issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt); err != nil {
+			&issue.Priority, &issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution); err != nil {
 			return nil, err
 		}
 		issues = append(issues, issue)

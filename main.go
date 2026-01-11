@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/pflag"
 	flag "github.com/spf13/pflag"
 )
 
@@ -84,6 +85,7 @@ List/Ready Flags:
 
 List-Only Flags:
   --status <string>     Filter by status (open, in_progress, closed)
+  --resolution <string> Filter by resolution (done, wontfix, duplicate)
 
 Show Flags:
   --json                Output as JSON
@@ -101,7 +103,10 @@ Update Flags:
   --type <string>       New type (task, bug, feature, epic)
   --description <text>  New description
   --blocked-by <id>     Add blocker (repeatable)
-  --unblock <id>        Remove blocker (repeatable)`)
+  --unblock <id>        Remove blocker (repeatable)
+
+Close Flags:
+  --resolution <string> Resolution (done, wontfix, duplicate), default done`)
 }
 
 func getDBPath() string {
@@ -187,13 +192,14 @@ func cmdList(args []string, w io.Writer) error {
 	statusFilter := fs.String("status", "", "Filter by status (open, in_progress, closed)")
 	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
+	resolutionFilter := fs.String("resolution", "", "Filter by resolution (done, wontfix, duplicate)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	// Validate filter values before opening store
-	if err := validateFilters(*statusFilter, *priorityFilter, *typeFilter); err != nil {
+	if err := validateFilters(*statusFilter, *priorityFilter, *typeFilter, *resolutionFilter); err != nil {
 		return err
 	}
 
@@ -209,7 +215,7 @@ func cmdList(args []string, w io.Writer) error {
 	}
 
 	// Apply filters
-	issues = filterIssues(issues, *statusFilter, *priorityFilter, *typeFilter)
+	issues = filterIssues(issues, *statusFilter, *priorityFilter, *typeFilter, *resolutionFilter)
 
 	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
 }
@@ -261,9 +267,9 @@ func addBlockers(store *Store, issueID string, blockerIDs []string) error {
 	return nil
 }
 
-// filterIssues applies status, priority, and type filters to a slice of issues.
-func filterIssues(issues []*Issue, status string, priority int, issueType string) []*Issue {
-	if status == "" && priority < 0 && issueType == "" {
+// filterIssues applies status, priority, type, and resolution filters to a slice of issues.
+func filterIssues(issues []*Issue, status string, priority int, issueType string, resolution string) []*Issue {
+	if status == "" && priority < 0 && issueType == "" && resolution == "" {
 		return issues // no filtering needed
 	}
 
@@ -278,13 +284,16 @@ func filterIssues(issues []*Issue, status string, priority int, issueType string
 		if issueType != "" && string(issue.Type) != issueType {
 			continue
 		}
+		if resolution != "" && string(issue.Resolution) != resolution {
+			continue
+		}
 		filtered = append(filtered, issue)
 	}
 	return filtered
 }
 
 // validateFilters checks that filter values are valid before applying them.
-func validateFilters(status string, priority int, issueType string) error {
+func validateFilters(status string, priority int, issueType string, resolution string) error {
 	if status != "" && !Status(status).Valid() {
 		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", status)
 	}
@@ -293,6 +302,9 @@ func validateFilters(status string, priority int, issueType string) error {
 	}
 	if issueType != "" && !IssueType(issueType).Valid() {
 		return fmt.Errorf("invalid type: %q (valid: task, bug, feature, epic)", issueType)
+	}
+	if resolution != "" && !Resolution(resolution).Valid() {
+		return fmt.Errorf("invalid resolution: %q (valid: done, wontfix, duplicate)", resolution)
 	}
 	return nil
 }
@@ -344,6 +356,9 @@ func cmdShow(args []string, w io.Writer) error {
 	fmt.Fprintf(w, "Updated:  %s\n", issue.UpdatedAt.Format("2006-01-02 15:04:05"))
 	if issue.ClosedAt != nil {
 		fmt.Fprintf(w, "Closed:   %s\n", issue.ClosedAt.Format("2006-01-02 15:04:05"))
+	}
+	if issue.Resolution != "" {
+		fmt.Fprintf(w, "Resolution: %s\n", issue.Resolution)
 	}
 
 	// Show dependencies
@@ -470,11 +485,24 @@ func cmdDelete(args []string, w io.Writer) error {
 
 // cmdClose closes an issue
 func cmdClose(args []string, w io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: bl close <id>")
+	fs := pflag.NewFlagSet("close", pflag.ContinueOnError)
+	resolutionFlag := fs.String("resolution", "done", "Resolution reason (done, wontfix, duplicate)")
+	fs.SetOutput(w)
+
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
 
-	id := args[0]
+	if fs.NArg() == 0 {
+		return errors.New("usage: bl close <id> [--resolution <done|wontfix|duplicate>]")
+	}
+
+	id := fs.Arg(0)
+	resolution := Resolution(*resolutionFlag)
+
+	if !resolution.Valid() {
+		return fmt.Errorf("invalid resolution: %q (must be done, wontfix, or duplicate)", *resolutionFlag)
+	}
 
 	store, err := openStore()
 	if err != nil {
@@ -488,7 +516,7 @@ func cmdClose(args []string, w io.Writer) error {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
-	if err := store.CloseIssue(id); err != nil {
+	if err := store.CloseIssue(id, resolution); err != nil {
 		return fmt.Errorf("failed to close: %w", err)
 	}
 
@@ -509,8 +537,8 @@ func cmdReady(args []string, w io.Writer) error {
 		return err
 	}
 
-	// Validate filter values before opening store
-	if err := validateFilters("", *priorityFilter, *typeFilter); err != nil {
+	// Validate filter values before opening store (no status/resolution for ready)
+	if err := validateFilters("", *priorityFilter, *typeFilter, ""); err != nil {
 		return err
 	}
 
@@ -525,8 +553,8 @@ func cmdReady(args []string, w io.Writer) error {
 		return fmt.Errorf("failed to get ready work: %w", err)
 	}
 
-	// Apply filters (no status filter - ready work is already filtered to open/in_progress)
-	issues = filterIssues(issues, "", *priorityFilter, *typeFilter)
+	// Apply filters (no status/resolution filter - ready work is already filtered to open/in_progress)
+	issues = filterIssues(issues, "", *priorityFilter, *typeFilter, "")
 
 	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
 }
@@ -705,10 +733,22 @@ bl ready --json       # machine-readable output
 bl list               # all tasks
 bl list --tree        # dependency visualization
 bl create "title"     # new task
-bl close <id>         # complete task
-bl update <a> --blocked-by <b>   # a blocked by b
+bl close <id>         # complete task (resolution: done)
+bl close <id> --resolution wontfix   # close as won't fix
+bl close <id> --resolution duplicate # close as duplicate
+bl update <a> --blocked-by <b>       # a blocked by b
 bl show <id>          # task details
+bl list --status closed --resolution wontfix  # filter by resolution
 ` + "```" + `
+
+## Closing Tasks
+
+When closing tasks, specify WHY with --resolution:
+- ` + "`done`" + ` (default): Work completed successfully
+- ` + "`wontfix`" + `: Intentionally rejected (document reasoning in description)
+- ` + "`duplicate`" + `: Duplicate of another issue
+
+Use ` + "`bl list --status closed --resolution wontfix`" + ` to review rejected ideas.
 
 ## Epic Workflow
 

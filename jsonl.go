@@ -23,6 +23,7 @@ type IssueExport struct {
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
 	ClosedAt     *time.Time         `json:"closed_at,omitempty"`
+	Resolution   Resolution         `json:"resolution,omitempty"`
 	Dependencies []DependencyExport `json:"dependencies"`
 }
 
@@ -50,6 +51,7 @@ func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,
 		ClosedAt:     issue.ClosedAt,
+		Resolution:   issue.Resolution,
 		Dependencies: make([]DependencyExport, len(deps)),
 	}
 	for i, dep := range deps {
@@ -157,6 +159,7 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 				CreatedAt:   export.CreatedAt,
 				UpdatedAt:   export.UpdatedAt,
 				ClosedAt:    export.ClosedAt,
+				Resolution:  export.Resolution,
 			}
 
 			if existing != nil {
