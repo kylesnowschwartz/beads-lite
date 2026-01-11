@@ -889,7 +889,7 @@ func cmdUpgrade(w io.Writer) error {
 	defer os.RemoveAll(tmpDir)
 
 	// Use tar command to extract (simpler than implementing tar in Go)
-	cmd := execCommand("tar", "-xzf", tmpFile.Name(), "-C", tmpDir)
+	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", tmpDir)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to extract: %w", err)
 	}
@@ -917,11 +917,4 @@ func cmdUpgrade(w io.Writer) error {
 
 	fmt.Fprintf(w, "Upgraded to %s\n", latest)
 	return nil
-}
-
-// execCommand wraps exec.Command for easier testing
-var execCommand = execCommandReal
-
-func execCommandReal(name string, args ...string) interface{ Run() error } {
-	return exec.Command(name, args...)
 }

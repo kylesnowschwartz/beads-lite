@@ -9,12 +9,6 @@ func TestDepTypeConstants(t *testing.T) {
 	if DepBlocks != "blocks" {
 		t.Errorf("DepBlocks = %q, want %q", DepBlocks, "blocks")
 	}
-	if DepParentChild != "parent-child" {
-		t.Errorf("DepParentChild = %q, want %q", DepParentChild, "parent-child")
-	}
-	if DepRelated != "related" {
-		t.Errorf("DepRelated = %q, want %q", DepRelated, "related")
-	}
 }
 
 func TestDepTypeValid(t *testing.T) {
@@ -23,8 +17,8 @@ func TestDepTypeValid(t *testing.T) {
 		want    bool
 	}{
 		{DepBlocks, true},
-		{DepParentChild, true},
-		{DepRelated, true},
+		{"parent-child", false},
+		{"related", false},
 		{"invalid", false},
 		{"", false},
 	}

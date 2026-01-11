@@ -12,20 +12,11 @@ type DepType string
 const (
 	// DepBlocks indicates the depended-on issue must close before this issue is ready.
 	DepBlocks DepType = "blocks"
-	// DepParentChild indicates a hierarchical relationship (children blocked if parent blocked).
-	DepParentChild DepType = "parent-child"
-	// DepRelated indicates a non-blocking informational relationship.
-	DepRelated DepType = "related"
 )
 
 // Valid returns true if the dependency type is a known valid type.
 func (d DepType) Valid() bool {
-	switch d {
-	case DepBlocks, DepParentChild, DepRelated:
-		return true
-	default:
-		return false
-	}
+	return d == DepBlocks
 }
 
 // Dependency represents an edge in the issue dependency graph.

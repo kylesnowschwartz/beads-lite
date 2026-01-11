@@ -219,49 +219,6 @@ func TestStoreGetReadyWork(t *testing.T) {
 	}
 }
 
-func TestStoreGetReadyWorkWithParentChild(t *testing.T) {
-	store := newTestStore(t)
-	defer store.Close()
-
-	// Create epic with subtasks
-	epic := NewIssue("Epic")
-	epic.Type = IssueTypeEpic
-	task1 := NewIssue("Subtask 1")
-	task2 := NewIssue("Subtask 2")
-	blocker := NewIssue("Blocker")
-
-	store.CreateIssue(epic)
-	store.CreateIssue(task1)
-	store.CreateIssue(task2)
-	store.CreateIssue(blocker)
-
-	// Set up parent-child relationships
-	store.AddDependency(task1.ID, epic.ID, DepParentChild)
-	store.AddDependency(task2.ID, epic.ID, DepParentChild)
-
-	// Block the epic
-	store.AddDependency(epic.ID, blocker.ID, DepBlocks)
-
-	// Only blocker should be ready (epic blocked, children transitively blocked)
-	ready, err := store.GetReadyWork()
-	if err != nil {
-		t.Fatalf("GetReadyWork() error = %v", err)
-	}
-	if len(ready) != 1 {
-		t.Fatalf("GetReadyWork() returned %d issues, want 1", len(ready))
-	}
-	if ready[0].ID != blocker.ID {
-		t.Errorf("Ready issue = %q, want %q (blocker)", ready[0].ID, blocker.ID)
-	}
-
-	// Close blocker, now epic and both subtasks should be ready
-	store.CloseIssue(blocker.ID, ResolutionDone)
-	ready, _ = store.GetReadyWork()
-	if len(ready) != 3 {
-		t.Errorf("After closing blocker, got %d ready, want 3", len(ready))
-	}
-}
-
 func TestStoreRemoveDependencyNonExistent(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()
@@ -321,12 +278,11 @@ func TestStoreRemoveAllDependencies(t *testing.T) {
 	// Add multiple dependencies to A
 	store.AddDependency(issueA.ID, issueB.ID, DepBlocks)
 	store.AddDependency(issueA.ID, issueC.ID, DepBlocks)
-	store.AddDependency(issueA.ID, issueB.ID, DepParentChild)
 
-	// Verify A has 3 dependencies
+	// Verify A has 2 dependencies
 	deps, _ := store.GetDependencies(issueA.ID)
-	if len(deps) != 3 {
-		t.Fatalf("Before removal: got %d deps, want 3", len(deps))
+	if len(deps) != 2 {
+		t.Fatalf("Before removal: got %d deps, want 2", len(deps))
 	}
 
 	// Remove all dependencies for A

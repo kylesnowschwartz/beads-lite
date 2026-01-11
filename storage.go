@@ -216,7 +216,6 @@ func (s *Store) GetDependencies(issueID string) ([]*Dependency, error) {
 }
 
 // GetReadyWork returns issues that are open and not blocked.
-// Uses recursive CTE to find directly blocked issues and transitively blocked children.
 func (s *Store) GetReadyWork() ([]*Issue, error) {
 	query := `
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
@@ -224,23 +223,11 @@ func (s *Store) GetReadyWork() ([]*Issue, error) {
 		FROM issues i
 		WHERE i.status IN ('open', 'in_progress')
 		AND i.id NOT IN (
-			WITH RECURSIVE blocked AS (
-				-- Directly blocked: has 'blocks' dependency on non-closed issue
-				SELECT DISTINCT d.issue_id
-				FROM dependencies d
-				JOIN issues blocker ON d.depends_on_id = blocker.id
-				WHERE d.type = 'blocks'
-				  AND blocker.status != 'closed'
-
-				UNION
-
-				-- Transitively blocked: parent is blocked (parent-child relationship)
-				SELECT d.issue_id
-				FROM blocked b
-				JOIN dependencies d ON d.depends_on_id = b.issue_id
-				WHERE d.type = 'parent-child'
-			)
-			SELECT issue_id FROM blocked
+			SELECT DISTINCT d.issue_id
+			FROM dependencies d
+			JOIN issues blocker ON d.depends_on_id = blocker.id
+			WHERE d.type = 'blocks'
+			  AND blocker.status != 'closed'
 		)
 		ORDER BY i.priority ASC, i.created_at ASC
 	`
