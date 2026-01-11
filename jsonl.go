@@ -3,6 +3,7 @@ package beadslite
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,12 +38,41 @@ type ImportStats struct {
 	Updated int
 }
 
+// toIssueExport converts an Issue and its dependencies to an IssueExport.
+func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
+	export := IssueExport{
+		ID:           issue.ID,
+		Title:        issue.Title,
+		Description:  issue.Description,
+		Status:       issue.Status,
+		Priority:     issue.Priority,
+		Type:         issue.Type,
+		CreatedAt:    issue.CreatedAt,
+		UpdatedAt:    issue.UpdatedAt,
+		ClosedAt:     issue.ClosedAt,
+		Dependencies: make([]DependencyExport, len(deps)),
+	}
+	for i, dep := range deps {
+		export.Dependencies[i] = DependencyExport{
+			DependsOn: dep.DependsOnID,
+			Type:      dep.Type,
+		}
+	}
+	return export
+}
+
 // ExportToJSONL writes all issues to the writer in JSONL format.
 // Issues are sorted by ID for deterministic output (git-friendly).
 func ExportToJSONL(store *Store, w io.Writer) error {
 	issues, err := store.ListIssues()
 	if err != nil {
 		return fmt.Errorf("list issues: %w", err)
+	}
+
+	// Batch-fetch all dependencies to avoid N+1 queries
+	allDeps, err := store.GetAllDependencies()
+	if err != nil {
+		return fmt.Errorf("get all dependencies: %w", err)
 	}
 
 	// Sort by ID for deterministic output
@@ -52,32 +82,7 @@ func ExportToJSONL(store *Store, w io.Writer) error {
 
 	encoder := json.NewEncoder(w)
 	for _, issue := range issues {
-		// Get dependencies for this issue
-		deps, err := store.GetDependencies(issue.ID)
-		if err != nil {
-			return fmt.Errorf("get dependencies for %s: %w", issue.ID, err)
-		}
-
-		export := IssueExport{
-			ID:           issue.ID,
-			Title:        issue.Title,
-			Description:  issue.Description,
-			Status:       issue.Status,
-			Priority:     issue.Priority,
-			Type:         issue.Type,
-			CreatedAt:    issue.CreatedAt,
-			UpdatedAt:    issue.UpdatedAt,
-			ClosedAt:     issue.ClosedAt,
-			Dependencies: make([]DependencyExport, len(deps)),
-		}
-
-		for i, dep := range deps {
-			export.Dependencies[i] = DependencyExport{
-				DependsOn: dep.DependsOnID,
-				Type:      dep.Type,
-			}
-		}
-
+		export := toIssueExport(issue, allDeps[issue.ID])
 		if err := encoder.Encode(export); err != nil {
 			return fmt.Errorf("encode issue %s: %w", issue.ID, err)
 		}
@@ -122,7 +127,7 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 
 		// Check if issue exists
 		existing, err := store.GetIssue(export.ID)
-		if err != nil && err.Error() != "issue not found" {
+		if err != nil && !errors.Is(err, ErrIssueNotFound) {
 			return nil, fmt.Errorf("line %d: check existing: %w", lineNum, err)
 		}
 
@@ -145,15 +150,9 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 			}
 			stats.Updated++
 
-			// Clear existing dependencies before re-adding
-			existingDeps, err := store.GetDependencies(issue.ID)
-			if err != nil {
-				return nil, fmt.Errorf("line %d: get deps: %w", lineNum, err)
-			}
-			for _, dep := range existingDeps {
-				if err := store.RemoveDependency(dep.IssueID, dep.DependsOnID, dep.Type); err != nil {
-					return nil, fmt.Errorf("line %d: remove dep: %w", lineNum, err)
-				}
+			// Clear existing dependencies before re-adding (single query instead of N queries)
+			if err := store.RemoveAllDependencies(issue.ID); err != nil {
+				return nil, fmt.Errorf("line %d: remove deps: %w", lineNum, err)
 			}
 		} else {
 			// Create new issue

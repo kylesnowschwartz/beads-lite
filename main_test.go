@@ -10,11 +10,18 @@ import (
 
 // CLI tests execute the CLI via runCLI helper and check output/exit codes.
 
-func TestCLI_Init(t *testing.T) {
+// setupTestDir creates a temp directory and changes to it for the duration of the test.
+// Uses t.Cleanup() to automatically restore the working directory when the test completes.
+func setupTestDir(t *testing.T) {
+	t.Helper()
 	dir := t.TempDir()
 	oldDir, _ := os.Getwd()
 	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	t.Cleanup(func() { os.Chdir(oldDir) })
+}
+
+func TestCLI_Init(t *testing.T) {
+	setupTestDir(t)
 
 	out, err := runCLI([]string{"init"})
 	if err != nil {
@@ -37,10 +44,7 @@ func TestCLI_Init(t *testing.T) {
 }
 
 func TestCLI_Init_AlreadyExists(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	// First init
 	runCLI([]string{"init"})
@@ -53,10 +57,7 @@ func TestCLI_Init_AlreadyExists(t *testing.T) {
 }
 
 func TestCLI_Create(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -72,10 +73,7 @@ func TestCLI_Create(t *testing.T) {
 }
 
 func TestCLI_Create_NoTitle(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -86,10 +84,7 @@ func TestCLI_Create_NoTitle(t *testing.T) {
 }
 
 func TestCLI_List(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "Task One"})
@@ -109,10 +104,7 @@ func TestCLI_List(t *testing.T) {
 }
 
 func TestCLI_List_Empty(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -127,10 +119,7 @@ func TestCLI_List_Empty(t *testing.T) {
 }
 
 func TestCLI_Show(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "My Task"})
@@ -150,10 +139,7 @@ func TestCLI_Show(t *testing.T) {
 }
 
 func TestCLI_Show_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -164,10 +150,7 @@ func TestCLI_Show_NotFound(t *testing.T) {
 }
 
 func TestCLI_Update(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Original Title"})
@@ -185,10 +168,7 @@ func TestCLI_Update(t *testing.T) {
 }
 
 func TestCLI_Update_Status(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task"})
@@ -206,10 +186,7 @@ func TestCLI_Update_Status(t *testing.T) {
 }
 
 func TestCLI_Close(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task"})
@@ -227,10 +204,7 @@ func TestCLI_Close(t *testing.T) {
 }
 
 func TestCLI_Ready(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Ready Task"})
@@ -247,10 +221,7 @@ func TestCLI_Ready(t *testing.T) {
 }
 
 func TestCLI_Ready_Empty(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -264,11 +235,8 @@ func TestCLI_Ready_Empty(t *testing.T) {
 	}
 }
 
-func TestCLI_DepAdd(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+func TestCLI_Update_BlockedBy(t *testing.T) {
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Task A"})
@@ -276,9 +244,9 @@ func TestCLI_DepAdd(t *testing.T) {
 	idA := extractID(outA)
 	idB := extractID(outB)
 
-	_, err := runCLI([]string{"dep", "add", idB, idA}) // B blocked by A
+	_, err := runCLI([]string{"update", idB, "--blocked-by", idA}) // B blocked by A
 	if err != nil {
-		t.Fatalf("dep add failed: %v", err)
+		t.Fatalf("update --blocked-by failed: %v", err)
 	}
 
 	// B should not be in ready list
@@ -291,11 +259,8 @@ func TestCLI_DepAdd(t *testing.T) {
 	}
 }
 
-func TestCLI_DepRm(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+func TestCLI_Update_Unblock(t *testing.T) {
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Task A"})
@@ -303,41 +268,42 @@ func TestCLI_DepRm(t *testing.T) {
 	idA := extractID(outA)
 	idB := extractID(outB)
 
-	runCLI([]string{"dep", "add", idB, idA})
-	_, err := runCLI([]string{"dep", "rm", idB, idA})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
+	_, err := runCLI([]string{"update", idB, "--unblock", idA})
 	if err != nil {
-		t.Fatalf("dep rm failed: %v", err)
+		t.Fatalf("update --unblock failed: %v", err)
 	}
 
 	// B should now be in ready list
 	readyOut, _ := runCLI([]string{"ready"})
 	if !strings.Contains(readyOut, idB) {
-		t.Errorf("B should be ready after dep removed: %s", readyOut)
+		t.Errorf("B should be ready after blocker removed: %s", readyOut)
 	}
 }
 
-func TestCLI_DepAdd_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+func TestCLI_Update_BlockedBy_NotFound(t *testing.T) {
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Task A"})
 	idA := extractID(outA)
 
-	_, err := runCLI([]string{"dep", "add", "bl-9999", idA})
+	// Non-existent issue being updated
+	_, err := runCLI([]string{"update", "bl-9999", "--blocked-by", idA})
 	if err == nil {
-		t.Error("dep add with non-existent issue should fail")
+		t.Error("update non-existent issue should fail")
+	}
+
+	// Non-existent blocker
+	_, err = runCLI([]string{"update", idA, "--blocked-by", "bl-9999"})
+	if err == nil {
+		t.Error("update with non-existent blocker should fail")
 	}
 }
 
 // TestCLI_BlockingChain is the key acceptance test from the context packet
 func TestCLI_BlockingChain(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	// Setup
 	runCLI([]string{"init"})
@@ -350,8 +316,8 @@ func TestCLI_BlockingChain(t *testing.T) {
 	idC := extractID(outC)
 
 	// B blocked by A, C blocked by B
-	runCLI([]string{"dep", "add", idB, idA})
-	runCLI([]string{"dep", "add", idC, idB})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
+	runCLI([]string{"update", idC, "--blocked-by", idB})
 
 	// Only A should be ready
 	ready1, _ := runCLI([]string{"ready"})
@@ -401,10 +367,7 @@ func TestCLI_UnknownCommand(t *testing.T) {
 }
 
 func TestCLI_NoInit(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	// Without init, commands should fail gracefully
 	_, err := runCLI([]string{"list"})
@@ -414,10 +377,7 @@ func TestCLI_NoInit(t *testing.T) {
 }
 
 func TestCLI_Export_Stdout(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "Export Test"})
@@ -437,10 +397,7 @@ func TestCLI_Export_Stdout(t *testing.T) {
 }
 
 func TestCLI_Export_File(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "File Export Test"})
@@ -465,10 +422,7 @@ func TestCLI_Export_File(t *testing.T) {
 }
 
 func TestCLI_Import(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -493,10 +447,7 @@ func TestCLI_Import(t *testing.T) {
 }
 
 func TestCLI_Import_NoFile(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -508,10 +459,7 @@ func TestCLI_Import_NoFile(t *testing.T) {
 
 // TestCLI_RoundTrip_Full is the acceptance test from the Phase 3 spec
 func TestCLI_RoundTrip_Full(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	// Setup: init, create tasks, add dependency
 	runCLI([]string{"init"})
@@ -519,7 +467,7 @@ func TestCLI_RoundTrip_Full(t *testing.T) {
 	outB, _ := runCLI([]string{"create", "Task B"})
 	idA := extractID(outA)
 	idB := extractID(outB)
-	runCLI([]string{"dep", "add", idB, idA}) // B blocked by A
+	runCLI([]string{"update", idB, "--blocked-by", idA}) // B blocked by A
 
 	// Export to file
 	runCLI([]string{"export", "backup.jsonl"})
@@ -596,10 +544,7 @@ func dbPath() string {
 // Tests for --json flag (Phase 4)
 
 func TestCLI_List_JSON(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "JSON Task"})
@@ -622,10 +567,7 @@ func TestCLI_List_JSON(t *testing.T) {
 }
 
 func TestCLI_Ready_JSON(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "Ready JSON Task"})
@@ -641,11 +583,38 @@ func TestCLI_Ready_JSON(t *testing.T) {
 	}
 }
 
+func TestCLI_Ready_Tree(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	// Create parent and child tasks
+	parentOut, _ := runCLI([]string{"create", "Parent Task"})
+	parentID := extractID(parentOut)
+	childOut, _ := runCLI([]string{"create", "Child Task"})
+	childID := extractID(childOut)
+
+	// Add blocker (child blocked by parent)
+	runCLI([]string{"update", childID, "--blocked-by", parentID})
+
+	// Ready --tree should show hierarchical view
+	out, err := runCLI([]string{"ready", "--tree"})
+	if err != nil {
+		t.Fatalf("ready --tree failed: %v", err)
+	}
+
+	// Should show parent (the only ready task, since child is blocked)
+	if !strings.Contains(out, "Parent Task") {
+		t.Errorf("expected Parent Task in tree output: %s", out)
+	}
+	// Child should NOT be shown (it's blocked)
+	if strings.Contains(out, "Child Task") {
+		t.Errorf("Child Task should not appear in ready tree (it's blocked): %s", out)
+	}
+}
+
 func TestCLI_Show_JSON(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Show JSON Task"})
@@ -668,10 +637,7 @@ func TestCLI_Show_JSON(t *testing.T) {
 // Tests for --tree flag (Phase 4)
 
 func TestCLI_List_Tree(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Parent Task"})
@@ -680,7 +646,7 @@ func TestCLI_List_Tree(t *testing.T) {
 	idB := extractID(outB)
 
 	// B blocked by A (A is parent, B is child in tree)
-	runCLI([]string{"dep", "add", idB, idA})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
 
 	out, err := runCLI([]string{"list", "--tree"})
 	if err != nil {
@@ -702,10 +668,7 @@ func TestCLI_List_Tree(t *testing.T) {
 }
 
 func TestCLI_List_Tree_MultipleRoots(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	runCLI([]string{"create", "Root One"})
@@ -726,10 +689,7 @@ func TestCLI_List_Tree_MultipleRoots(t *testing.T) {
 }
 
 func TestCLI_List_Tree_Chain(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Task A"})
@@ -740,8 +700,8 @@ func TestCLI_List_Tree_Chain(t *testing.T) {
 	idC := extractID(outC)
 
 	// C blocked by B, B blocked by A
-	runCLI([]string{"dep", "add", idB, idA})
-	runCLI([]string{"dep", "add", idC, idB})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
+	runCLI([]string{"update", idC, "--blocked-by", idB})
 
 	out, err := runCLI([]string{"list", "--tree"})
 	if err != nil {
@@ -802,10 +762,7 @@ func TestCLI_Onboard_IsValidMarkdown(t *testing.T) {
 // Tests for --description flag
 
 func TestCLI_Create_WithDescription(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -824,10 +781,7 @@ func TestCLI_Create_WithDescription(t *testing.T) {
 }
 
 func TestCLI_Update_Description(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task"})
@@ -845,10 +799,7 @@ func TestCLI_Update_Description(t *testing.T) {
 }
 
 func TestCLI_Create_Description_JSON(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task", "--description", "Test description"})
@@ -867,10 +818,7 @@ func TestCLI_Create_Description_JSON(t *testing.T) {
 // Tests for filtering flags (--status, --priority, --type)
 
 func TestCLI_List_FilterByStatus(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outOpen, _ := runCLI([]string{"create", "Open Task"})
@@ -902,10 +850,7 @@ func TestCLI_List_FilterByStatus(t *testing.T) {
 }
 
 func TestCLI_List_FilterByPriority(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outP1, _ := runCLI([]string{"create", "P1 Task"})
@@ -927,10 +872,7 @@ func TestCLI_List_FilterByPriority(t *testing.T) {
 }
 
 func TestCLI_List_FilterByType(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outBug, _ := runCLI([]string{"create", "Bug Report"})
@@ -952,10 +894,7 @@ func TestCLI_List_FilterByType(t *testing.T) {
 }
 
 func TestCLI_List_CombinedFilters(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	// Create 4 tasks with different combinations
@@ -989,10 +928,7 @@ func TestCLI_List_CombinedFilters(t *testing.T) {
 }
 
 func TestCLI_Ready_FilterByPriority(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outP0, _ := runCLI([]string{"create", "Critical Task"})
@@ -1014,10 +950,7 @@ func TestCLI_Ready_FilterByPriority(t *testing.T) {
 }
 
 func TestCLI_Ready_FilterByType(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outBug, _ := runCLI([]string{"create", "Fix Bug"})
@@ -1041,10 +974,7 @@ func TestCLI_Ready_FilterByType(t *testing.T) {
 // Tests for delete command
 
 func TestCLI_Delete_RequiresConfirm(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task to Delete"})
@@ -1064,10 +994,7 @@ func TestCLI_Delete_RequiresConfirm(t *testing.T) {
 }
 
 func TestCLI_Delete_WithConfirm(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	createOut, _ := runCLI([]string{"create", "Task to Delete"})
@@ -1090,10 +1017,7 @@ func TestCLI_Delete_WithConfirm(t *testing.T) {
 }
 
 func TestCLI_Delete_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 
@@ -1104,10 +1028,7 @@ func TestCLI_Delete_NotFound(t *testing.T) {
 }
 
 func TestCLI_Delete_RemovesDependencies(t *testing.T) {
-	dir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldDir)
+	setupTestDir(t)
 
 	runCLI([]string{"init"})
 	outA, _ := runCLI([]string{"create", "Task A"})
@@ -1116,7 +1037,7 @@ func TestCLI_Delete_RemovesDependencies(t *testing.T) {
 	idB := extractID(outB)
 
 	// B blocked by A
-	runCLI([]string{"dep", "add", idB, idA})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
 
 	// B should be blocked
 	ready1, _ := runCLI([]string{"ready"})
@@ -1131,5 +1052,455 @@ func TestCLI_Delete_RemovesDependencies(t *testing.T) {
 	ready2, _ := runCLI([]string{"ready"})
 	if !strings.Contains(ready2, "Task B") {
 		t.Errorf("B should be ready after blocker deleted: %s", ready2)
+	}
+}
+
+// Tests for create command extended flags (bl-cl0q)
+
+func TestCLI_Create_WithPriority(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	out, err := runCLI([]string{"create", "Critical Bug", "--priority", "0"})
+	if err != nil {
+		t.Fatalf("create with priority failed: %v", err)
+	}
+
+	id := extractID(out)
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "P0") {
+		t.Errorf("expected P0 priority, got: %s", showOut)
+	}
+}
+
+func TestCLI_Create_WithType(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	out, err := runCLI([]string{"create", "New Feature", "--type", "feature"})
+	if err != nil {
+		t.Fatalf("create with type failed: %v", err)
+	}
+
+	id := extractID(out)
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "feature") {
+		t.Errorf("expected feature type, got: %s", showOut)
+	}
+}
+
+func TestCLI_Create_WithBlockedBy(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	// Create blocker first
+	blockerOut, _ := runCLI([]string{"create", "Blocker Task"})
+	blockerID := extractID(blockerOut)
+
+	// Create task blocked by blocker
+	out, err := runCLI([]string{"create", "Blocked Task", "--blocked-by", blockerID})
+	if err != nil {
+		t.Fatalf("create with blocked-by failed: %v", err)
+	}
+
+	blockedID := extractID(out)
+
+	// Blocked task should NOT be in ready list
+	readyOut, _ := runCLI([]string{"ready"})
+	if strings.Contains(readyOut, "Blocked Task") {
+		t.Errorf("blocked task should not be ready: %s", readyOut)
+	}
+	if !strings.Contains(readyOut, "Blocker Task") {
+		t.Errorf("blocker should be ready: %s", readyOut)
+	}
+
+	// Close blocker, blocked task should become ready
+	runCLI([]string{"close", blockerID})
+	readyOut2, _ := runCLI([]string{"ready"})
+	if !strings.Contains(readyOut2, blockedID) {
+		t.Errorf("blocked task should be ready after blocker closed: %s", readyOut2)
+	}
+}
+
+func TestCLI_Create_WithMultipleBlockedBy(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	// Create two blockers
+	blocker1Out, _ := runCLI([]string{"create", "Blocker One"})
+	blocker2Out, _ := runCLI([]string{"create", "Blocker Two"})
+	blocker1ID := extractID(blocker1Out)
+	blocker2ID := extractID(blocker2Out)
+
+	// Create task blocked by both
+	out, err := runCLI([]string{"create", "Double Blocked", "--blocked-by", blocker1ID, "--blocked-by", blocker2ID})
+	if err != nil {
+		t.Fatalf("create with multiple blocked-by failed: %v", err)
+	}
+
+	blockedID := extractID(out)
+
+	// Should not be ready
+	readyOut, _ := runCLI([]string{"ready"})
+	if strings.Contains(readyOut, "Double Blocked") {
+		t.Errorf("double blocked task should not be ready: %s", readyOut)
+	}
+
+	// Close first blocker - still blocked by second
+	runCLI([]string{"close", blocker1ID})
+	readyOut2, _ := runCLI([]string{"ready"})
+	if strings.Contains(readyOut2, "Double Blocked") {
+		t.Errorf("should still be blocked by second blocker: %s", readyOut2)
+	}
+
+	// Close second blocker - now ready
+	runCLI([]string{"close", blocker2ID})
+	readyOut3, _ := runCLI([]string{"ready"})
+	if !strings.Contains(readyOut3, blockedID) {
+		t.Errorf("should be ready after both blockers closed: %s", readyOut3)
+	}
+}
+
+func TestCLI_Create_BlockedByInvalid(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	// Try to create with non-existent blocker
+	_, err := runCLI([]string{"create", "Task", "--blocked-by", "bl-9999"})
+	if err == nil {
+		t.Error("create with non-existent blocker should fail")
+	}
+}
+
+func TestCLI_Update_CycleDetection(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+
+	// A blocked by B
+	runCLI([]string{"update", idA, "--blocked-by", idB})
+
+	// B blocked by A - creates cycle
+	// Currently this is allowed by the storage layer.
+	// This test documents the current behavior.
+	_, err := runCLI([]string{"update", idB, "--blocked-by", idA})
+	// NOTE: Currently cycles ARE allowed. This test documents this behavior.
+	// If cycle detection is added, this test should change to expect an error.
+	if err != nil {
+		t.Logf("Cycle was rejected (good): %v", err)
+	} else {
+		t.Log("Cycle was allowed (current behavior - no cycle detection)")
+		// Both tasks should still appear somewhere since there's no blocking algorithm protection
+		readyOut, _ := runCLI([]string{"ready"})
+		listOut, _ := runCLI([]string{"list"})
+		t.Logf("ready: %s", readyOut)
+		t.Logf("list: %s", listOut)
+	}
+}
+
+func TestCLI_Close_NotFound(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"close", "bl-9999"})
+	if err == nil {
+		t.Error("close non-existent should fail")
+	}
+}
+
+func TestCLI_Update_SelfReference(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+	out, _ := runCLI([]string{"create", "Task"})
+	id := extractID(out)
+
+	// Try to make task block itself
+	_, err := runCLI([]string{"update", id, "--blocked-by", id})
+	if err == nil {
+		t.Error("self-reference dependency should fail")
+	}
+}
+
+func TestCLI_Create_AllFlagsCombined(t *testing.T) {
+	setupTestDir(t)
+
+	runCLI([]string{"init"})
+
+	blockerOut, _ := runCLI([]string{"create", "Epic"})
+	blockerID := extractID(blockerOut)
+
+	// Create with all flags at once
+	out, err := runCLI([]string{"create", "Full Featured Task",
+		"--description", "Detailed description here",
+		"--priority", "1",
+		"--type", "bug",
+		"--blocked-by", blockerID})
+	if err != nil {
+		t.Fatalf("create with all flags failed: %v", err)
+	}
+
+	id := extractID(out)
+	showOut, _ := runCLI([]string{"show", id})
+
+	if !strings.Contains(showOut, "Full Featured Task") {
+		t.Errorf("missing title: %s", showOut)
+	}
+	if !strings.Contains(showOut, "Detailed description here") {
+		t.Errorf("missing description: %s", showOut)
+	}
+	if !strings.Contains(showOut, "P1") {
+		t.Errorf("missing P1 priority: %s", showOut)
+	}
+	if !strings.Contains(showOut, "bug") {
+		t.Errorf("missing bug type: %s", showOut)
+	}
+
+	// Should be blocked
+	readyOut, _ := runCLI([]string{"ready"})
+	if strings.Contains(readyOut, "Full Featured Task") {
+		t.Errorf("should be blocked: %s", readyOut)
+	}
+}
+
+func TestCLI_Create_InvalidPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Priority too high
+	_, err := runCLI([]string{"create", "Test", "--priority", "5"})
+	if err == nil {
+		t.Error("create with priority 5 should fail")
+	}
+
+	// Priority too low (negative)
+	_, err = runCLI([]string{"create", "Test", "--priority", "-1"})
+	if err == nil {
+		t.Error("create with negative priority should fail")
+	}
+}
+
+func TestCLI_Create_InvalidType(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"create", "Test", "--type", "invalid"})
+	if err == nil {
+		t.Error("create with invalid type should fail")
+	}
+}
+
+func TestCLI_List_InvalidStatus(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Test Task"})
+
+	_, err := runCLI([]string{"list", "--status", "invalid"})
+	if err == nil {
+		t.Error("list with invalid status should fail")
+	}
+}
+
+func TestCLI_List_InvalidPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Test Task"})
+
+	// Priority too high
+	_, err := runCLI([]string{"list", "--priority", "5"})
+	if err == nil {
+		t.Error("list with priority 5 should fail")
+	}
+
+	// Negative priority is valid (means "no filter")
+	_, err = runCLI([]string{"list", "--priority", "-1"})
+	if err != nil {
+		t.Errorf("negative priority should be valid (no filter): %v", err)
+	}
+}
+
+func TestCLI_List_InvalidType(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Test Task"})
+
+	_, err := runCLI([]string{"list", "--type", "invalid"})
+	if err == nil {
+		t.Error("list with invalid type should fail")
+	}
+}
+
+func TestCLI_Ready_InvalidPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Test Task"})
+
+	_, err := runCLI([]string{"ready", "--priority", "5"})
+	if err == nil {
+		t.Error("ready with invalid priority should fail")
+	}
+}
+
+func TestCLI_Ready_InvalidType(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Test Task"})
+
+	_, err := runCLI([]string{"ready", "--type", "invalid"})
+	if err == nil {
+		t.Error("ready with invalid type should fail")
+	}
+}
+
+// TestCLI_Ready_DiamondDependency tests diamond dependency pattern:
+// A blocks B and C, both B and C block D.
+// Only A should be ready until A is closed.
+func TestCLI_Ready_DiamondDependency(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create 4 tasks: A, B, C, D
+	outA, _ := runCLI([]string{"create", "Task A"})
+	idA := extractID(outA)
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idB := extractID(outB)
+	outC, _ := runCLI([]string{"create", "Task C"})
+	idC := extractID(outC)
+	outD, _ := runCLI([]string{"create", "Task D"})
+	idD := extractID(outD)
+
+	// Diamond: A blocks B, A blocks C, B blocks D, C blocks D
+	runCLI([]string{"update", idB, "--blocked-by", idA}) // B blocked by A
+	runCLI([]string{"update", idC, "--blocked-by", idA}) // C blocked by A
+	runCLI([]string{"update", idD, "--blocked-by", idB}) // D blocked by B
+	runCLI([]string{"update", idD, "--blocked-by", idC}) // D blocked by C
+
+	// Only A should be ready
+	ready1, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready1, "Task A") {
+		t.Errorf("expected Task A to be ready: %s", ready1)
+	}
+	if strings.Contains(ready1, "Task B") || strings.Contains(ready1, "Task C") || strings.Contains(ready1, "Task D") {
+		t.Errorf("only Task A should be ready: %s", ready1)
+	}
+
+	// Close A - now B and C should be ready
+	runCLI([]string{"close", idA})
+	ready2, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready2, "Task B") {
+		t.Errorf("expected Task B to be ready: %s", ready2)
+	}
+	if !strings.Contains(ready2, "Task C") {
+		t.Errorf("expected Task C to be ready: %s", ready2)
+	}
+	if strings.Contains(ready2, "Task D") {
+		t.Errorf("Task D should still be blocked: %s", ready2)
+	}
+
+	// Close B - D still blocked by C
+	runCLI([]string{"close", idB})
+	ready3, _ := runCLI([]string{"ready"})
+	if strings.Contains(ready3, "Task D") {
+		t.Errorf("Task D should still be blocked by C: %s", ready3)
+	}
+
+	// Close C - now D is ready
+	runCLI([]string{"close", idC})
+	ready4, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready4, "Task D") {
+		t.Errorf("expected Task D to be ready: %s", ready4)
+	}
+}
+
+// TestCLI_Ready_ChainedBlocking tests that blocking propagates through chains.
+// If A blocks B and B blocks C, then A being open blocks both B and C.
+func TestCLI_Ready_ChainedBlocking(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create 3 tasks: Blocker, Middle, End
+	outBlocker, _ := runCLI([]string{"create", "Blocker Task"})
+	idBlocker := extractID(outBlocker)
+	outMiddle, _ := runCLI([]string{"create", "Middle Task"})
+	idMiddle := extractID(outMiddle)
+	outEnd, _ := runCLI([]string{"create", "End Task"})
+	idEnd := extractID(outEnd)
+
+	// Chain: Blocker blocks Middle, Middle blocks End
+	runCLI([]string{"update", idMiddle, "--blocked-by", idBlocker}) // Middle blocked by Blocker
+	runCLI([]string{"update", idEnd, "--blocked-by", idMiddle})     // End blocked by Middle
+
+	// Only Blocker should be ready
+	ready1, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready1, "Blocker Task") {
+		t.Errorf("expected Blocker Task to be ready: %s", ready1)
+	}
+	if strings.Contains(ready1, "Middle Task") || strings.Contains(ready1, "End Task") {
+		t.Errorf("only Blocker should be ready: %s", ready1)
+	}
+
+	// Close Blocker - Middle becomes ready, but End still blocked by Middle
+	runCLI([]string{"close", idBlocker})
+	ready2, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready2, "Middle Task") {
+		t.Errorf("expected Middle Task to be ready: %s", ready2)
+	}
+	if strings.Contains(ready2, "End Task") {
+		t.Errorf("End Task should still be blocked by Middle: %s", ready2)
+	}
+
+	// Close Middle - End becomes ready
+	runCLI([]string{"close", idMiddle})
+	ready3, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready3, "End Task") {
+		t.Errorf("expected End Task to be ready: %s", ready3)
+	}
+}
+
+// TestCLI_Ready_PartiallyClosedBlockers tests that a task is blocked until ALL blockers are closed.
+func TestCLI_Ready_PartiallyClosedBlockers(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create 3 tasks: A, B both block C
+	outA, _ := runCLI([]string{"create", "Task A"})
+	idA := extractID(outA)
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idB := extractID(outB)
+	outC, _ := runCLI([]string{"create", "Task C"})
+	idC := extractID(outC)
+
+	// C blocked by both A and B
+	runCLI([]string{"update", idC, "--blocked-by", idA})
+	runCLI([]string{"update", idC, "--blocked-by", idB})
+
+	// A and B ready, C blocked
+	ready1, _ := runCLI([]string{"ready"})
+	if strings.Contains(ready1, "Task C") {
+		t.Errorf("Task C should be blocked: %s", ready1)
+	}
+
+	// Close A - C still blocked by B
+	runCLI([]string{"close", idA})
+	ready2, _ := runCLI([]string{"ready"})
+	if strings.Contains(ready2, "Task C") {
+		t.Errorf("Task C should still be blocked by B: %s", ready2)
+	}
+
+	// Close B - C now ready
+	runCLI([]string{"close", idB})
+	ready3, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready3, "Task C") {
+		t.Errorf("expected Task C to be ready: %s", ready3)
 	}
 }

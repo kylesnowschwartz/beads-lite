@@ -3,10 +3,14 @@ package beadslite
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// ErrIssueNotFound is returned when an issue does not exist in the database.
+var ErrIssueNotFound = errors.New("issue not found")
 
 // Store provides SQLite-backed storage for issues and dependencies.
 type Store struct {
@@ -18,13 +22,13 @@ type Store struct {
 func NewStore(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open database %s: %w", dbPath, err)
 	}
 
 	store := &Store{db: db}
 	if err := store.initSchema(); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
 	return store, nil
@@ -69,8 +73,10 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_deps_type ON dependencies(type, depends_on_id);
 	CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("exec schema: %w", err)
+	}
+	return nil
 }
 
 // CreateIssue inserts a new issue into the database.
@@ -79,12 +85,14 @@ func (s *Store) CreateIssue(issue *Issue) error {
 		return err
 	}
 
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.Type,
-		issue.CreatedAt, issue.UpdatedAt)
-	return err
+		issue.CreatedAt, issue.UpdatedAt); err != nil {
+		return fmt.Errorf("insert issue: %w", err)
+	}
+	return nil
 }
 
 // GetIssue retrieves an issue by ID.
@@ -97,7 +105,7 @@ func (s *Store) GetIssue(id string) (*Issue, error) {
 		&issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt)
 
 	if err == sql.ErrNoRows {
-		return nil, errors.New("issue not found")
+		return nil, ErrIssueNotFound
 	}
 	return issue, err
 }
@@ -109,22 +117,26 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 	}
 
 	issue.UpdatedAt = time.Now()
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		UPDATE issues SET title = ?, description = ?, status = ?, priority = ?,
 		issue_type = ?, updated_at = ?, closed_at = ?
 		WHERE id = ?`,
 		issue.Title, issue.Description, issue.Status, issue.Priority,
-		issue.Type, issue.UpdatedAt, issue.ClosedAt, issue.ID)
-	return err
+		issue.Type, issue.UpdatedAt, issue.ClosedAt, issue.ID); err != nil {
+		return fmt.Errorf("update issue: %w", err)
+	}
+	return nil
 }
 
 // CloseIssue marks an issue as closed.
 func (s *Store) CloseIssue(id string) error {
 	now := time.Now()
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		UPDATE issues SET status = ?, updated_at = ?, closed_at = ?
-		WHERE id = ?`, StatusClosed, now, now, id)
-	return err
+		WHERE id = ?`, StatusClosed, now, now, id); err != nil {
+		return fmt.Errorf("close issue: %w", err)
+	}
+	return nil
 }
 
 // ListIssues returns all issues.
@@ -159,6 +171,12 @@ func (s *Store) RemoveDependency(issueID, dependsOnID string, depType DepType) e
 	_, err := s.db.Exec(`
 		DELETE FROM dependencies WHERE issue_id = ? AND depends_on_id = ? AND type = ?`,
 		issueID, dependsOnID, depType)
+	return err
+}
+
+// RemoveAllDependencies removes all dependencies where the issue is the dependent.
+func (s *Store) RemoveAllDependencies(issueID string) error {
+	_, err := s.db.Exec(`DELETE FROM dependencies WHERE issue_id = ?`, issueID)
 	return err
 }
 

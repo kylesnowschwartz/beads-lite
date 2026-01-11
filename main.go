@@ -46,8 +46,6 @@ func Run(args []string, w io.Writer) error {
 		return cmdClose(cmdArgs, w)
 	case "ready":
 		return cmdReady(cmdArgs, w)
-	case "dep":
-		return cmdDep(cmdArgs, w)
 	case "export":
 		return cmdExport(cmdArgs, w)
 	case "import":
@@ -70,35 +68,38 @@ Commands:
   create <title>        Create a new issue, prints ID
   list [--json] [--tree] List all issues
   show <id> [--json]    Show issue details
-  update <id> [flags]   Update an issue
+  update <id> [flags]   Update an issue (including blockers)
   delete <id> --confirm Delete an issue permanently
   close <id>            Close an issue
   ready [--json]        List unblocked work
-  dep add <id> <dep-id> Add dependency (id blocked by dep-id)
-  dep rm <id> <dep-id>  Remove dependency
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
   onboard               Print Claude Code integration instructions
 
 List/Ready flags:
   --json                Output as JSONL (one JSON object per line)
-  --tree                Show dependency tree (list only)
-  --status <string>     Filter by status (open, in_progress, closed) - list only
-  --priority <int>      Filter by priority (0-4)
-  --type <string>       Filter by type (task, bug, feature, epic)
+  --tree                Show dependency tree (list and ready)
+  --status <string>     Filter by status (open, in_progress, closed) (list only)
+  --priority <int>      Filter by priority (0-4) (list and ready)
+  --type <string>       Filter by type (task, bug, feature, epic) (list and ready)
 
 Show flags:
   --json                Output as JSON
 
 Create flags:
   --description <text>  Issue description
+  --priority <int>      Priority (0-4), default 2
+  --type <string>       Type (task, bug, feature, epic), default task
+  --blocked-by <id>     Issue ID that blocks this (repeatable)
 
 Update flags:
   --title <string>      New title
   --status <string>     New status (open, in_progress, closed)
   --priority <int>      New priority (0-4)
   --type <string>       New type (task, bug, feature, epic)
-  --description <text>  New description`)
+  --description <text>  New description
+  --blocked-by <id>     Add blocker (repeatable)
+  --unblock <id>        Remove blocker (repeatable)`)
 }
 
 func getDBPath() string {
@@ -136,6 +137,9 @@ func cmdCreate(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(w)
 	description := fs.String("description", "", "Issue description")
+	priority := fs.Int("priority", 2, "Priority (0-4)")
+	issueType := fs.String("type", "task", "Type (task, bug, feature, epic)")
+	blockedBy := fs.StringSlice("blocked-by", nil, "Issue ID that blocks this (repeatable)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -143,7 +147,7 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl create <title> [--description <text>]")
+		return errors.New("usage: bl create <title> [--description <text>] [--priority <int>] [--type <type>] [--blocked-by <id>]")
 	}
 
 	title := strings.Join(remaining, " ")
@@ -156,8 +160,22 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	issue := NewIssue(title)
 	issue.Description = *description
+	issue.Priority = *priority
+	issue.Type = IssueType(*issueType)
+
 	if err := store.CreateIssue(issue); err != nil {
 		return fmt.Errorf("failed to create issue: %w", err)
+	}
+
+	// Add dependencies if specified
+	for _, blockerID := range *blockedBy {
+		// Verify blocker exists
+		if _, err := store.GetIssue(blockerID); err != nil {
+			return fmt.Errorf("blocker %s: %w", blockerID, err)
+		}
+		if err := store.AddDependency(issue.ID, blockerID, DepBlocks); err != nil {
+			return fmt.Errorf("failed to add dependency: %w", err)
+		}
 	}
 
 	fmt.Fprintf(w, "Created %s: %s\n", issue.ID, issue.Title)
@@ -175,6 +193,11 @@ func cmdList(args []string, w io.Writer) error {
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Validate filter values before opening store
+	if err := validateFilters(*statusFilter, *priorityFilter, *typeFilter); err != nil {
 		return err
 	}
 
@@ -210,10 +233,15 @@ func cmdList(args []string, w io.Writer) error {
 	}
 
 	for _, issue := range issues {
-		fmt.Fprintf(w, "%s  %-11s  P%d  %s  %s\n",
-			issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
+		fmt.Fprintln(w, formatIssueLine(issue))
 	}
 	return nil
+}
+
+// formatIssueLine returns a formatted string for displaying an issue in list/ready output.
+func formatIssueLine(issue *Issue) string {
+	return fmt.Sprintf("%s  %-11s  P%d  %s  %s",
+		issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
 }
 
 // filterIssues applies status, priority, and type filters to a slice of issues.
@@ -236,6 +264,20 @@ func filterIssues(issues []*Issue, status string, priority int, issueType string
 		filtered = append(filtered, issue)
 	}
 	return filtered
+}
+
+// validateFilters checks that filter values are valid before applying them.
+func validateFilters(status string, priority int, issueType string) error {
+	if status != "" && !Status(status).Valid() {
+		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", status)
+	}
+	if priority >= 0 && priority > 4 {
+		return fmt.Errorf("invalid priority: %d (valid: 0-4)", priority)
+	}
+	if issueType != "" && !IssueType(issueType).Valid() {
+		return fmt.Errorf("invalid type: %q (valid: task, bug, feature, epic)", issueType)
+	}
+	return nil
 }
 
 // cmdShow displays details for a single issue
@@ -266,7 +308,10 @@ func cmdShow(args []string, w io.Writer) error {
 	}
 
 	if *jsonOutput {
-		deps, _ := store.GetDependencies(id)
+		deps, err := store.GetDependencies(id)
+		if err != nil {
+			return fmt.Errorf("get dependencies: %w", err)
+		}
 		return outputSingleIssueJSON(issue, deps, w)
 	}
 
@@ -299,7 +344,7 @@ func cmdShow(args []string, w io.Writer) error {
 // cmdUpdate modifies an existing issue
 func cmdUpdate(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bl update <id> [--title <title>] [--status <status>] [--priority <priority>] [--type <type>] [--description <text>]")
+		return errors.New("usage: bl update <id> [--title <title>] [--status <status>] [--priority <priority>] [--type <type>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
 	}
 
 	id := args[0]
@@ -312,6 +357,8 @@ func cmdUpdate(args []string, w io.Writer) error {
 	priority := fs.Int("priority", -1, "New priority (0-4)")
 	issueType := fs.String("type", "", "New type")
 	description := fs.String("description", "", "New description")
+	addBlockers := fs.StringSlice("blocked-by", nil, "Add blocker (repeatable)")
+	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
@@ -346,6 +393,28 @@ func cmdUpdate(args []string, w io.Writer) error {
 
 	if err := store.UpdateIssue(issue); err != nil {
 		return fmt.Errorf("failed to update: %w", err)
+	}
+
+	// Handle blocker additions
+	for _, blockerID := range *addBlockers {
+		// Verify blocker exists
+		if _, err := store.GetIssue(blockerID); err != nil {
+			return fmt.Errorf("blocker %s: %w", blockerID, err)
+		}
+		// Prevent self-reference
+		if blockerID == id {
+			return errors.New("issue cannot block itself")
+		}
+		if err := store.AddDependency(id, blockerID, DepBlocks); err != nil {
+			return fmt.Errorf("add blocker %s: %w", blockerID, err)
+		}
+	}
+
+	// Handle blocker removals
+	for _, blockerID := range *rmBlockers {
+		if err := store.RemoveDependency(id, blockerID, DepBlocks); err != nil {
+			return fmt.Errorf("remove blocker %s: %w", blockerID, err)
+		}
 	}
 
 	fmt.Fprintf(w, "Updated %s\n", id)
@@ -424,10 +493,16 @@ func cmdReady(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
 	fs.SetOutput(w)
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
+	treeFlag := fs.Bool("tree", false, "Show dependency tree")
 	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Validate filter values before opening store
+	if err := validateFilters("", *priorityFilter, *typeFilter); err != nil {
 		return err
 	}
 
@@ -457,81 +532,13 @@ func cmdReady(args []string, w io.Writer) error {
 		return outputIssuesJSON(store, issues, w)
 	}
 
+	if *treeFlag {
+		return outputIssuesTree(store, issues, w)
+	}
+
 	for _, issue := range issues {
-		fmt.Fprintf(w, "%s  %-11s  P%d  %s  %s\n",
-			issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
+		fmt.Fprintln(w, formatIssueLine(issue))
 	}
-	return nil
-}
-
-// cmdDep handles dependency subcommands (add, rm)
-func cmdDep(args []string, w io.Writer) error {
-	if len(args) < 1 {
-		return errors.New("usage: bl dep <add|rm> <issue-id> <depends-on-id>")
-	}
-
-	subcmd := args[0]
-	subArgs := args[1:]
-
-	switch subcmd {
-	case "add":
-		return cmdDepAdd(subArgs, w)
-	case "rm":
-		return cmdDepRm(subArgs, w)
-	default:
-		return fmt.Errorf("unknown dep subcommand: %s", subcmd)
-	}
-}
-
-func cmdDepAdd(args []string, w io.Writer) error {
-	if len(args) < 2 {
-		return errors.New("usage: bl dep add <issue-id> <depends-on-id>")
-	}
-
-	issueID := args[0]
-	dependsOnID := args[1]
-
-	store, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
-	// Verify both issues exist
-	if _, err := store.GetIssue(issueID); err != nil {
-		return fmt.Errorf("issue %s: %w", issueID, err)
-	}
-	if _, err := store.GetIssue(dependsOnID); err != nil {
-		return fmt.Errorf("issue %s: %w", dependsOnID, err)
-	}
-
-	if err := store.AddDependency(issueID, dependsOnID, DepBlocks); err != nil {
-		return fmt.Errorf("failed to add dependency: %w", err)
-	}
-
-	fmt.Fprintf(w, "Added dependency: %s blocked by %s\n", issueID, dependsOnID)
-	return nil
-}
-
-func cmdDepRm(args []string, w io.Writer) error {
-	if len(args) < 2 {
-		return errors.New("usage: bl dep rm <issue-id> <depends-on-id>")
-	}
-
-	issueID := args[0]
-	dependsOnID := args[1]
-
-	store, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
-	if err := store.RemoveDependency(issueID, dependsOnID, DepBlocks); err != nil {
-		return fmt.Errorf("failed to remove dependency: %w", err)
-	}
-
-	fmt.Fprintf(w, "Removed dependency: %s no longer blocked by %s\n", issueID, dependsOnID)
 	return nil
 }
 
@@ -582,27 +589,15 @@ func cmdImport(args []string, w io.Writer) error {
 
 // outputIssuesJSON outputs issues as JSONL (one JSON object per line)
 func outputIssuesJSON(store *Store, issues []*Issue, w io.Writer) error {
+	// Batch-fetch all dependencies to avoid N+1 queries
+	allDeps, err := store.GetAllDependencies()
+	if err != nil {
+		return fmt.Errorf("get all dependencies: %w", err)
+	}
+
 	encoder := json.NewEncoder(w)
 	for _, issue := range issues {
-		deps, _ := store.GetDependencies(issue.ID)
-		export := IssueExport{
-			ID:           issue.ID,
-			Title:        issue.Title,
-			Description:  issue.Description,
-			Status:       issue.Status,
-			Priority:     issue.Priority,
-			Type:         issue.Type,
-			CreatedAt:    issue.CreatedAt,
-			UpdatedAt:    issue.UpdatedAt,
-			ClosedAt:     issue.ClosedAt,
-			Dependencies: make([]DependencyExport, len(deps)),
-		}
-		for i, dep := range deps {
-			export.Dependencies[i] = DependencyExport{
-				DependsOn: dep.DependsOnID,
-				Type:      dep.Type,
-			}
-		}
+		export := toIssueExport(issue, allDeps[issue.ID])
 		if err := encoder.Encode(export); err != nil {
 			return err
 		}
@@ -612,26 +607,19 @@ func outputIssuesJSON(store *Store, issues []*Issue, w io.Writer) error {
 
 // outputSingleIssueJSON outputs a single issue as JSON (not JSONL)
 func outputSingleIssueJSON(issue *Issue, deps []*Dependency, w io.Writer) error {
-	export := IssueExport{
-		ID:           issue.ID,
-		Title:        issue.Title,
-		Description:  issue.Description,
-		Status:       issue.Status,
-		Priority:     issue.Priority,
-		Type:         issue.Type,
-		CreatedAt:    issue.CreatedAt,
-		UpdatedAt:    issue.UpdatedAt,
-		ClosedAt:     issue.ClosedAt,
-		Dependencies: make([]DependencyExport, len(deps)),
-	}
-	for i, dep := range deps {
-		export.Dependencies[i] = DependencyExport{
-			DependsOn: dep.DependsOnID,
-			Type:      dep.Type,
-		}
-	}
+	export := toIssueExport(issue, deps)
 	encoder := json.NewEncoder(w)
 	return encoder.Encode(export)
+}
+
+// sortByPriorityThenID sorts issues by priority (ascending) then by ID (alphabetical).
+func sortByPriorityThenID(issues []*Issue) {
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].Priority != issues[j].Priority {
+			return issues[i].Priority < issues[j].Priority
+		}
+		return issues[i].ID < issues[j].ID
+	})
 }
 
 // outputIssuesTree renders issues as a dependency tree
@@ -682,17 +670,11 @@ func outputIssuesTree(store *Store, issues []*Issue, w io.Writer) error {
 	}
 
 	// Sort roots by priority then ID for deterministic output
-	sort.Slice(roots, func(i, j int) bool {
-		if roots[i].Priority != roots[j].Priority {
-			return roots[i].Priority < roots[j].Priority
-		}
-		return roots[i].ID < roots[j].ID
-	})
+	sortByPriorityThenID(roots)
 
 	// Render tree
 	for _, root := range roots {
-		fmt.Fprintf(w, "%s  %s  P%d  %s  %s\n",
-			root.ID, root.Status, root.Priority, root.Type, root.Title)
+		fmt.Fprintln(w, formatIssueLine(root))
 		printTree(w, children, root.ID, "")
 	}
 
@@ -702,13 +684,7 @@ func outputIssuesTree(store *Store, issues []*Issue, w io.Writer) error {
 // printTree recursively prints children with tree-drawing characters
 func printTree(w io.Writer, children map[string][]*Issue, parentID string, prefix string) {
 	kids := children[parentID]
-	// Sort children by priority then ID
-	sort.Slice(kids, func(i, j int) bool {
-		if kids[i].Priority != kids[j].Priority {
-			return kids[i].Priority < kids[j].Priority
-		}
-		return kids[i].ID < kids[j].ID
-	})
+	sortByPriorityThenID(kids)
 
 	for i, child := range kids {
 		isLast := i == len(kids)-1
@@ -716,9 +692,7 @@ func printTree(w io.Writer, children map[string][]*Issue, parentID string, prefi
 		if isLast {
 			connector = "└── "
 		}
-		fmt.Fprintf(w, "%s%s%s  %s  P%d  %s  %s\n",
-			prefix, connector,
-			child.ID, child.Status, child.Priority, child.Type, child.Title)
+		fmt.Fprintf(w, "%s%s%s\n", prefix, connector, formatIssueLine(child))
 
 		extension := "│   "
 		if isLast {
@@ -738,7 +712,7 @@ This project uses beads-lite for task tracking. You MUST use it to track work.
 
 1. Run ` + "`bl ready`" + ` at session start to see available work
 2. When you discover new work, create a task: ` + "`bl create \"description\"`" + `
-3. When tasks depend on each other: ` + "`bl dep add <blocked> <blocker>`" + `
+3. When tasks depend on each other: ` + "`bl update <id> --blocked-by <blocker>`" + `
 4. When you complete work: ` + "`bl close <id>`" + `
 
 ## Commands
@@ -750,8 +724,31 @@ bl list               # all tasks
 bl list --tree        # dependency visualization
 bl create "title"     # new task
 bl close <id>         # complete task
-bl dep add <a> <b>    # a is blocked by b
+bl update <a> --blocked-by <b>   # a blocked by b
 bl show <id>          # task details
+` + "```" + `
+
+## Epic Workflow
+
+Epics group related tasks. Use blockers for actual work dependencies, not organization.
+
+` + "```" + `
+# Create epic to track a feature
+bl create "User authentication" --type epic
+
+# Create tasks for the epic (work on them immediately)
+bl create "Add login endpoint"
+bl create "Add session storage"
+bl create "Add logout endpoint"
+
+# If tasks have real dependencies, add blockers
+bl update <logout-id> --blocked-by <login-id>
+
+# View all work
+bl list --tree
+
+# Close tasks as completed, close epic when feature is done
+bl close <epic-id>
 ` + "```" + `
 
 ## Rules
