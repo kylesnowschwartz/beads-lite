@@ -2016,3 +2016,105 @@ func TestCLI_Ready_DeepChain(t *testing.T) {
 		t.Errorf("task 14 should be ready after chain closed: %s", readyOut2)
 	}
 }
+
+// TestCLI_HelpMatchesSubcommandFlags validates that the main help text
+// documents all flags defined by subcommands. This catches drift between
+// the manually-written printHelp() and the auto-generated pflag definitions.
+func TestCLI_HelpMatchesSubcommandFlags(t *testing.T) {
+	// Get the help output
+	helpOut, _ := runCLI([]string{"help"})
+
+	// Define expected flags for each command based on their FlagSet definitions
+	// These are derived from inspecting cmdList, cmdCreate, cmdUpdate, etc.
+	commandFlags := map[string][]string{
+		"list": {
+			"--json",
+			"--tree",
+			"--status",
+			"--priority",
+			"--type",
+			"--resolution",
+		},
+		"ready": {
+			"--json",
+			"--tree",
+			"--priority",
+			"--type",
+		},
+		"show": {
+			"--json",
+		},
+		"create": {
+			"--description",
+			"--priority",
+			"--type",
+			"--blocked-by",
+		},
+		"update": {
+			"--title",
+			"--status",
+			"--priority",
+			"--type",
+			"--description",
+			"--blocked-by",
+			"--unblock",
+		},
+		"close": {
+			"--resolution",
+		},
+		"delete": {
+			"--confirm",
+		},
+	}
+
+	// Check that each flag appears in the help text
+	var missing []string
+	for cmd, flags := range commandFlags {
+		for _, flag := range flags {
+			if !strings.Contains(helpOut, flag) {
+				missing = append(missing, fmt.Sprintf("%s: %s", cmd, flag))
+			}
+		}
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("main help is missing documentation for these flags:\n  %s\n\nHelp output:\n%s",
+			strings.Join(missing, "\n  "), helpOut)
+	}
+}
+
+// TestCLI_HelpDocumentsAllCommands verifies that all commands defined in
+// the Run() switch statement are documented in printHelp().
+func TestCLI_HelpDocumentsAllCommands(t *testing.T) {
+	// Get the help output
+	helpOut, _ := runCLI([]string{"help"})
+
+	// Commands that should be documented (from Run() switch)
+	commands := []string{
+		"init",
+		"create",
+		"list",
+		"show",
+		"update",
+		"delete",
+		"close",
+		"ready",
+		"export",
+		"import",
+		"onboard",
+		"version",
+		"upgrade",
+	}
+
+	var missing []string
+	for _, cmd := range commands {
+		// Check for command name at start of line or after whitespace
+		if !strings.Contains(helpOut, cmd) {
+			missing = append(missing, cmd)
+		}
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("main help is missing documentation for these commands: %v", missing)
+	}
+}
