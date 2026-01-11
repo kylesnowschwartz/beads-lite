@@ -18,22 +18,46 @@ Key files:
 ## Commands
 
 ```bash
-# Run tests
-go test ./...
+just test     # run tests
+just build    # build ./bl binary
+just dev      # test then build
 
-# Build
-go build -o bl .
-
-# Run
 ./bl <command>
+```
+
+## Task Tracking
+
+This project uses beads-lite to track its own development.
+
+```bash
+bl ready              # what can I work on?
+bl list --tree        # see all tasks with dependencies
+bl create "title"     # new task
+bl close <id>         # complete task
+bl dep add <a> <b>    # a blocked by b
 ```
 
 ## Development Rules
 
-1. **TDD**: Write failing test first, then implement
+1. **TDD**: Write failing test first, then implement to make it pass
 2. **Stdlib preferred**: Avoid external dependencies beyond go-sqlite3
-3. **Simple CLI**: Minimal flags, easy for AI agents to use correctly
+3. **No short flags**: Use `--json` not `-j` (AI agents parse long flags better)
 4. **Tests > Docs > Code**: When in doubt, the test is the spec
+5. **Run tests frequently**: `just test` after each meaningful change
+
+### TDD Workflow
+
+1. Write test in `*_test.go` that exercises the new behavior
+2. Run `just test` - confirm test fails (red)
+3. Implement minimum code to pass
+4. Run `just test` - confirm test passes (green)
+5. Refactor if needed, keeping tests green
+
+### Critical Constraints
+
+- **NO SHORT FLAGS**: This CLI is for AI agents. Use `fs.String("name", ...)` not `fs.StringP("name", "n", ...)`
+- **Minimal deps**: go-sqlite3 for DB, pflag for CLI parsing. No cobra, no viper.
+- **Keep it simple**: If a feature needs a diagram to explain, it's too complex
 
 ## Architecture
 

@@ -3,13 +3,14 @@ package beadslite
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	flag "github.com/spf13/pflag"
 )
 
 const (
@@ -188,20 +189,19 @@ func cmdList(args []string, w io.Writer) error {
 
 // cmdShow displays details for a single issue
 func cmdShow(args []string, w io.Writer) error {
-	// Extract ID (first non-flag argument) and check for --json
-	var id string
-	jsonOutput := false
-	for _, arg := range args {
-		if arg == "--json" {
-			jsonOutput = true
-		} else if !strings.HasPrefix(arg, "-") && id == "" {
-			id = arg
-		}
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	fs.SetOutput(w)
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
 
-	if id == "" {
+	remaining := fs.Args()
+	if len(remaining) == 0 {
 		return errors.New("usage: bl show <id> [--json]")
 	}
+	id := remaining[0]
 
 	store, err := openStore()
 	if err != nil {
@@ -214,7 +214,7 @@ func cmdShow(args []string, w io.Writer) error {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
-	if jsonOutput {
+	if *jsonOutput {
 		deps, _ := store.GetDependencies(id)
 		return outputSingleIssueJSON(issue, deps, w)
 	}
