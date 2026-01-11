@@ -32,21 +32,57 @@ bl close <tests-id>
 bl ready                                        # now "Deploy" shows
 ```
 
-### All Commands
+### CLI Reference
 
 ```
-bl init                          Initialize database
-bl create "title"                Create task
-bl list                          List all tasks
-bl list --tree                   Show dependency tree
-bl ready                         Show unblocked tasks
-bl show <id>                     Show task details
-bl update <id> --title "new"     Update task
-bl update <id> --blocked-by <b>  Add blocker
-bl close <id>                    Complete task
-bl delete <id> --confirm         Delete task
-bl export backup.jsonl           Export for git backup
-bl import backup.jsonl           Restore from backup
+Usage: bl <command> [args]
+
+Commands:
+  init                  Initialize .beads-lite/ directory and database
+  create <title>        Create a new issue, prints ID
+  list                  List all issues
+  show <id>             Show issue details
+  update <id>           Update an issue (including blockers)
+  delete <id>           Delete an issue permanently (requires --confirm)
+  close <id>            Close an issue
+  ready                 List unblocked work
+  export [file]         Export all issues to JSONL (stdout or file)
+  import <file>         Import issues from JSONL file
+  onboard               Print Claude Code integration instructions
+
+List/Ready Flags:
+  --json                Output as JSONL (one JSON object per line)
+  --tree                Show dependency tree
+  --priority <int>      Filter by priority (0-4)
+  --type <string>       Filter by type (task, bug, feature, epic)
+
+List-Only Flags:
+  --status <string>     Filter by status (open, in_progress, closed)
+  --resolution <string> Filter by resolution (done, wontfix, duplicate)
+
+Show Flags:
+  --json                Output as JSON
+
+Create Flags:
+  --description <text>  Issue description
+  --priority <int>      Priority (0-4), default 2
+  --type <string>       Type (task, bug, feature, epic), default task
+  --blocked-by <id>     Issue ID that blocks this (repeatable)
+
+Update Flags:
+  --title <string>      New title
+  --status <string>     New status (open, in_progress, closed)
+  --priority <int>      New priority (0-4)
+  --type <string>       New type (task, bug, feature, epic)
+  --description <text>  New description
+  --blocked-by <id>     Add blocker (repeatable)
+  --unblock <id>        Remove blocker (repeatable)
+
+Close Flags:
+  --resolution <string> Resolution (done, wontfix, duplicate), default done
+
+Delete Flags:
+  --confirm             Required to confirm permanent deletion
 ```
 
 ## Development
