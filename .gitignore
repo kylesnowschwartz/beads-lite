@@ -3,4 +3,4 @@
 /cmd/bl/bl
 
 # Local beads database
-.beads/
+.beads-lite/

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	beadsDir = ".beads"
+	beadsDir = ".beads-lite"
 	dbName   = "beads.db"
 )
 
@@ -64,7 +64,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, `Usage: bl <command> [args]
 
 Commands:
-  init                  Initialize .beads/ directory and database
+  init                  Initialize .beads-lite/ directory and database
   create <title>        Create a new issue, prints ID
   list [--json] [--tree] List all issues
   show <id> [--json]    Show issue details
@@ -100,7 +100,7 @@ func openStore() (*Store, error) {
 	return NewStore(dbPath)
 }
 
-// cmdInit creates the .beads directory and initializes the database
+// cmdInit creates the .beads-lite directory and initializes the database
 func cmdInit(w io.Writer) error {
 	if err := os.MkdirAll(beadsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create %s: %w", beadsDir, err)

@@ -21,14 +21,14 @@ func TestCLI_Init(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	// Check .beads directory created
-	if _, statErr := os.Stat(".beads"); os.IsNotExist(statErr) {
-		t.Error(".beads directory not created")
+	// Check .beads-lite directory created
+	if _, statErr := os.Stat(".beads-lite"); os.IsNotExist(statErr) {
+		t.Error(".beads-lite directory not created")
 	}
 
 	// Check database file created
-	if _, statErr := os.Stat(".beads/beads.db"); os.IsNotExist(statErr) {
-		t.Error(".beads/beads.db not created")
+	if _, statErr := os.Stat(".beads-lite/beads.db"); os.IsNotExist(statErr) {
+		t.Error(".beads-lite/beads.db not created")
 	}
 
 	if !strings.Contains(out, "Initialized") {
@@ -534,7 +534,7 @@ func TestCLI_RoundTrip_Full(t *testing.T) {
 	}
 
 	// Delete the database (simulating corruption recovery)
-	os.RemoveAll(".beads")
+	os.RemoveAll(".beads-lite")
 
 	// Re-init and import
 	runCLI([]string{"init"})
@@ -590,7 +590,7 @@ func extractID(output string) string {
 
 // dbPath returns the database path for the current directory
 func dbPath() string {
-	return filepath.Join(".beads", "beads.db")
+	return filepath.Join(".beads-lite", "beads.db")
 }
 
 // Tests for --json flag (Phase 4)
