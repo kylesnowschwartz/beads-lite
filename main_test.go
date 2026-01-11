@@ -798,3 +798,338 @@ func TestCLI_Onboard_IsValidMarkdown(t *testing.T) {
 		t.Errorf("expected markdown header at start, got: %s", out[:min(50, len(out))])
 	}
 }
+
+// Tests for --description flag
+
+func TestCLI_Create_WithDescription(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+
+	out, err := runCLI([]string{"create", "Fix bug", "--description", "Race condition in auth middleware"})
+	if err != nil {
+		t.Fatalf("create with description failed: %v", err)
+	}
+
+	id := extractID(out)
+
+	// Verify description is stored
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "Race condition in auth middleware") {
+		t.Errorf("expected description in show output, got: %s", showOut)
+	}
+}
+
+func TestCLI_Update_Description(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"update", id, "--description", "Added via update"})
+	if err != nil {
+		t.Fatalf("update description failed: %v", err)
+	}
+
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "Added via update") {
+		t.Errorf("expected updated description, got: %s", showOut)
+	}
+}
+
+func TestCLI_Create_Description_JSON(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Task", "--description", "Test description"})
+	id := extractID(createOut)
+
+	out, err := runCLI([]string{"show", id, "--json"})
+	if err != nil {
+		t.Fatalf("show --json failed: %v", err)
+	}
+
+	if !strings.Contains(out, `"description":"Test description"`) {
+		t.Errorf("expected description in JSON output, got: %s", out)
+	}
+}
+
+// Tests for filtering flags (--status, --priority, --type)
+
+func TestCLI_List_FilterByStatus(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outOpen, _ := runCLI([]string{"create", "Open Task"})
+	outClosed, _ := runCLI([]string{"create", "Closed Task"})
+	idClosed := extractID(outClosed)
+	runCLI([]string{"close", idClosed})
+
+	// Filter by open status
+	out, err := runCLI([]string{"list", "--status", "open"})
+	if err != nil {
+		t.Fatalf("list --status open failed: %v", err)
+	}
+	if !strings.Contains(out, "Open Task") {
+		t.Errorf("expected 'Open Task' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Closed Task") {
+		t.Errorf("should NOT contain 'Closed Task', got: %s", out)
+	}
+
+	// Filter by closed status
+	outClosed2, _ := runCLI([]string{"list", "--status", "closed"})
+	if strings.Contains(outClosed2, "Open Task") {
+		t.Errorf("should NOT contain 'Open Task' when filtering closed, got: %s", outClosed2)
+	}
+	if !strings.Contains(outClosed2, "Closed Task") {
+		t.Errorf("expected 'Closed Task' in closed filter, got: %s", outClosed2)
+	}
+	_ = outOpen // silence unused
+}
+
+func TestCLI_List_FilterByPriority(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outP1, _ := runCLI([]string{"create", "P1 Task"})
+	runCLI([]string{"create", "P2 Task"}) // default priority is P2
+	idP1 := extractID(outP1)
+	runCLI([]string{"update", idP1, "--priority", "1"})
+
+	// Filter by P1
+	out, err := runCLI([]string{"list", "--priority", "1"})
+	if err != nil {
+		t.Fatalf("list --priority 1 failed: %v", err)
+	}
+	if !strings.Contains(out, "P1 Task") {
+		t.Errorf("expected 'P1 Task' in output, got: %s", out)
+	}
+	if strings.Contains(out, "P2 Task") {
+		t.Errorf("should NOT contain 'P2 Task', got: %s", out)
+	}
+}
+
+func TestCLI_List_FilterByType(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outBug, _ := runCLI([]string{"create", "Bug Report"})
+	runCLI([]string{"create", "Feature Request"})
+	idBug := extractID(outBug)
+	runCLI([]string{"update", idBug, "--type", "bug"})
+
+	// Filter by bug type
+	out, err := runCLI([]string{"list", "--type", "bug"})
+	if err != nil {
+		t.Fatalf("list --type bug failed: %v", err)
+	}
+	if !strings.Contains(out, "Bug Report") {
+		t.Errorf("expected 'Bug Report' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Feature Request") {
+		t.Errorf("should NOT contain 'Feature Request', got: %s", out)
+	}
+}
+
+func TestCLI_List_CombinedFilters(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	// Create 4 tasks with different combinations
+	out1, _ := runCLI([]string{"create", "Open P1 Bug"})
+	out2, _ := runCLI([]string{"create", "Open P2 Bug"})
+	out3, _ := runCLI([]string{"create", "Open P1 Task"})
+	out4, _ := runCLI([]string{"create", "Closed P1 Bug"})
+
+	id1 := extractID(out1)
+	id2 := extractID(out2)
+	id3 := extractID(out3)
+	id4 := extractID(out4)
+
+	runCLI([]string{"update", id1, "--priority", "1", "--type", "bug"})
+	runCLI([]string{"update", id2, "--type", "bug"})
+	runCLI([]string{"update", id3, "--priority", "1"})
+	runCLI([]string{"update", id4, "--priority", "1", "--type", "bug"})
+	runCLI([]string{"close", id4})
+
+	// Filter: open + P1 + bug -> only "Open P1 Bug"
+	out, err := runCLI([]string{"list", "--status", "open", "--priority", "1", "--type", "bug"})
+	if err != nil {
+		t.Fatalf("combined filter failed: %v", err)
+	}
+	if !strings.Contains(out, "Open P1 Bug") {
+		t.Errorf("expected 'Open P1 Bug' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Open P2 Bug") || strings.Contains(out, "Open P1 Task") || strings.Contains(out, "Closed P1 Bug") {
+		t.Errorf("should only contain 'Open P1 Bug', got: %s", out)
+	}
+}
+
+func TestCLI_Ready_FilterByPriority(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outP0, _ := runCLI([]string{"create", "Critical Task"})
+	runCLI([]string{"create", "Normal Task"})
+	idP0 := extractID(outP0)
+	runCLI([]string{"update", idP0, "--priority", "0"})
+
+	// Filter ready by P0
+	out, err := runCLI([]string{"ready", "--priority", "0"})
+	if err != nil {
+		t.Fatalf("ready --priority 0 failed: %v", err)
+	}
+	if !strings.Contains(out, "Critical Task") {
+		t.Errorf("expected 'Critical Task' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Normal Task") {
+		t.Errorf("should NOT contain 'Normal Task', got: %s", out)
+	}
+}
+
+func TestCLI_Ready_FilterByType(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outBug, _ := runCLI([]string{"create", "Fix Bug"})
+	runCLI([]string{"create", "Add Feature"})
+	idBug := extractID(outBug)
+	runCLI([]string{"update", idBug, "--type", "bug"})
+
+	// Filter ready by bug
+	out, err := runCLI([]string{"ready", "--type", "bug"})
+	if err != nil {
+		t.Fatalf("ready --type bug failed: %v", err)
+	}
+	if !strings.Contains(out, "Fix Bug") {
+		t.Errorf("expected 'Fix Bug' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Add Feature") {
+		t.Errorf("should NOT contain 'Add Feature', got: %s", out)
+	}
+}
+
+// Tests for delete command
+
+func TestCLI_Delete_RequiresConfirm(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Task to Delete"})
+	id := extractID(createOut)
+
+	// Without --confirm, should fail
+	_, err := runCLI([]string{"delete", id})
+	if err == nil {
+		t.Error("delete without --confirm should fail")
+	}
+
+	// Task should still exist
+	_, showErr := runCLI([]string{"show", id})
+	if showErr != nil {
+		t.Errorf("task should still exist after failed delete: %v", showErr)
+	}
+}
+
+func TestCLI_Delete_WithConfirm(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Task to Delete"})
+	id := extractID(createOut)
+
+	// With --confirm, should succeed
+	out, err := runCLI([]string{"delete", id, "--confirm"})
+	if err != nil {
+		t.Fatalf("delete with --confirm failed: %v", err)
+	}
+	if !strings.Contains(out, "Deleted") {
+		t.Errorf("expected 'Deleted' in output, got: %s", out)
+	}
+
+	// Task should be gone
+	_, showErr := runCLI([]string{"show", id})
+	if showErr == nil {
+		t.Error("task should not exist after delete")
+	}
+}
+
+func TestCLI_Delete_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"delete", "bl-9999", "--confirm"})
+	if err == nil {
+		t.Error("delete non-existent should fail")
+	}
+}
+
+func TestCLI_Delete_RemovesDependencies(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	runCLI([]string{"init"})
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+
+	// B blocked by A
+	runCLI([]string{"dep", "add", idB, idA})
+
+	// B should be blocked
+	ready1, _ := runCLI([]string{"ready"})
+	if strings.Contains(ready1, "Task B") {
+		t.Errorf("B should be blocked before delete: %s", ready1)
+	}
+
+	// Delete A
+	runCLI([]string{"delete", idA, "--confirm"})
+
+	// B should now be ready (dependency removed)
+	ready2, _ := runCLI([]string{"ready"})
+	if !strings.Contains(ready2, "Task B") {
+		t.Errorf("B should be ready after blocker deleted: %s", ready2)
+	}
+}

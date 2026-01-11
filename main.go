@@ -40,6 +40,8 @@ func Run(args []string, w io.Writer) error {
 		return cmdShow(cmdArgs, w)
 	case "update":
 		return cmdUpdate(cmdArgs, w)
+	case "delete":
+		return cmdDelete(cmdArgs, w)
 	case "close":
 		return cmdClose(cmdArgs, w)
 	case "ready":
@@ -69,6 +71,7 @@ Commands:
   list [--json] [--tree] List all issues
   show <id> [--json]    Show issue details
   update <id> [flags]   Update an issue
+  delete <id> --confirm Delete an issue permanently
   close <id>            Close an issue
   ready [--json]        List unblocked work
   dep add <id> <dep-id> Add dependency (id blocked by dep-id)
@@ -77,15 +80,25 @@ Commands:
   import <file>         Import issues from JSONL file
   onboard               Print Claude Code integration instructions
 
-List/Ready/Show flags:
+List/Ready flags:
   --json                Output as JSONL (one JSON object per line)
   --tree                Show dependency tree (list only)
+  --status <string>     Filter by status (open, in_progress, closed) - list only
+  --priority <int>      Filter by priority (0-4)
+  --type <string>       Filter by type (task, bug, feature, epic)
+
+Show flags:
+  --json                Output as JSON
+
+Create flags:
+  --description <text>  Issue description
 
 Update flags:
   --title <string>      New title
   --status <string>     New status (open, in_progress, closed)
   --priority <int>      New priority (0-4)
-  --type <string>       New type (task, bug, feature, epic)`)
+  --type <string>       New type (task, bug, feature, epic)
+  --description <text>  New description`)
 }
 
 func getDBPath() string {
@@ -120,11 +133,20 @@ func cmdInit(w io.Writer) error {
 
 // cmdCreate creates a new issue
 func cmdCreate(args []string, w io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: bl create <title>")
+	fs := flag.NewFlagSet("create", flag.ContinueOnError)
+	fs.SetOutput(w)
+	description := fs.String("description", "", "Issue description")
+
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
 
-	title := strings.Join(args, " ")
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		return errors.New("usage: bl create <title> [--description <text>]")
+	}
+
+	title := strings.Join(remaining, " ")
 
 	store, err := openStore()
 	if err != nil {
@@ -133,6 +155,7 @@ func cmdCreate(args []string, w io.Writer) error {
 	defer store.Close()
 
 	issue := NewIssue(title)
+	issue.Description = *description
 	if err := store.CreateIssue(issue); err != nil {
 		return fmt.Errorf("failed to create issue: %w", err)
 	}
@@ -147,6 +170,9 @@ func cmdList(args []string, w io.Writer) error {
 	fs.SetOutput(w)
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
 	treeFlag := fs.Bool("tree", false, "Show dependency tree")
+	statusFilter := fs.String("status", "", "Filter by status (open, in_progress, closed)")
+	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
+	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -162,6 +188,9 @@ func cmdList(args []string, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("failed to list issues: %w", err)
 	}
+
+	// Apply filters
+	issues = filterIssues(issues, *statusFilter, *priorityFilter, *typeFilter)
 
 	if len(issues) == 0 {
 		if *jsonFlag {
@@ -185,6 +214,28 @@ func cmdList(args []string, w io.Writer) error {
 			issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
 	}
 	return nil
+}
+
+// filterIssues applies status, priority, and type filters to a slice of issues.
+func filterIssues(issues []*Issue, status string, priority int, issueType string) []*Issue {
+	if status == "" && priority < 0 && issueType == "" {
+		return issues // no filtering needed
+	}
+
+	var filtered []*Issue
+	for _, issue := range issues {
+		if status != "" && string(issue.Status) != status {
+			continue
+		}
+		if priority >= 0 && issue.Priority != priority {
+			continue
+		}
+		if issueType != "" && string(issue.Type) != issueType {
+			continue
+		}
+		filtered = append(filtered, issue)
+	}
+	return filtered
 }
 
 // cmdShow displays details for a single issue
@@ -248,7 +299,7 @@ func cmdShow(args []string, w io.Writer) error {
 // cmdUpdate modifies an existing issue
 func cmdUpdate(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bl update <id> [--title <title>] [--status <status>] [--priority <priority>] [--type <type>]")
+		return errors.New("usage: bl update <id> [--title <title>] [--status <status>] [--priority <priority>] [--type <type>] [--description <text>]")
 	}
 
 	id := args[0]
@@ -260,6 +311,7 @@ func cmdUpdate(args []string, w io.Writer) error {
 	status := fs.String("status", "", "New status")
 	priority := fs.Int("priority", -1, "New priority (0-4)")
 	issueType := fs.String("type", "", "New type")
+	description := fs.String("description", "", "New description")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
@@ -288,12 +340,55 @@ func cmdUpdate(args []string, w io.Writer) error {
 	if *issueType != "" {
 		issue.Type = IssueType(*issueType)
 	}
+	if fs.Changed("description") {
+		issue.Description = *description
+	}
 
 	if err := store.UpdateIssue(issue); err != nil {
 		return fmt.Errorf("failed to update: %w", err)
 	}
 
 	fmt.Fprintf(w, "Updated %s\n", id)
+	return nil
+}
+
+// cmdDelete permanently removes an issue
+func cmdDelete(args []string, w io.Writer) error {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+	fs.SetOutput(w)
+	confirm := fs.Bool("confirm", false, "Confirm deletion")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		return errors.New("usage: bl delete <id> --confirm")
+	}
+	id := remaining[0]
+
+	if !*confirm {
+		return errors.New("delete requires --confirm flag")
+	}
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	// Get issue first to show what was deleted
+	issue, err := store.GetIssue(id)
+	if err != nil {
+		return fmt.Errorf("issue %s: %w", id, err)
+	}
+
+	if err := store.DeleteIssue(id); err != nil {
+		return fmt.Errorf("failed to delete: %w", err)
+	}
+
+	fmt.Fprintf(w, "Deleted %s: %s\n", id, issue.Title)
 	return nil
 }
 
@@ -329,6 +424,8 @@ func cmdReady(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
 	fs.SetOutput(w)
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
+	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
+	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -344,6 +441,9 @@ func cmdReady(args []string, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("failed to get ready work: %w", err)
 	}
+
+	// Apply filters (no status filter - ready work is already filtered to open/in_progress)
+	issues = filterIssues(issues, "", *priorityFilter, *typeFilter)
 
 	if len(issues) == 0 {
 		if *jsonFlag {

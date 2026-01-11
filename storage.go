@@ -256,3 +256,34 @@ func (s *Store) GetAllDependencies() (map[string][]*Dependency, error) {
 	}
 	return result, rows.Err()
 }
+
+// DeleteIssue removes an issue and all its dependencies from the database.
+func (s *Store) DeleteIssue(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Delete dependencies where this issue is involved (either side)
+	_, err = tx.Exec(`DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?`, id, id)
+	if err != nil {
+		return err
+	}
+
+	// Delete the issue itself
+	result, err := tx.Exec(`DELETE FROM issues WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("issue not found")
+	}
+
+	return tx.Commit()
+}
