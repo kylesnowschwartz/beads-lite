@@ -746,9 +746,10 @@ This project uses beads-lite for task tracking. You MUST use it to track work.
 ## Required Workflow
 
 1. Run ` + "`bl ready`" + ` at session start to see available work
-2. When you discover new work, create a task: ` + "`bl create \"description\"`" + `
-3. When tasks depend on each other: ` + "`bl update <id> --blocked-by <blocker>`" + `
-4. When you complete work: ` + "`bl close <id>`" + `
+2. When you start working on a task: ` + "`bl update <id> --status in_progress`" + `
+3. When you discover new work, create a task: ` + "`bl create \"description\"`" + `
+4. When tasks depend on each other: ` + "`bl update <id> --blocked-by <blocker>`" + `
+5. When you complete work: ` + "`bl close <id>`" + `
 
 ## Commands
 
@@ -757,7 +758,9 @@ bl ready              # what can I work on now?
 bl ready --json       # machine-readable output
 bl list               # all tasks
 bl list --tree        # dependency visualization
+bl list --status in_progress  # see what's being worked on
 bl create "title"     # new task
+bl update <id> --status in_progress  # claim work
 bl close <id>         # complete task (resolution: done)
 bl close <id> --resolution wontfix   # close as won't fix
 bl close <id> --resolution duplicate # close as duplicate
@@ -801,6 +804,7 @@ bl close <epic-id>
 ## Rules
 
 - Always check ` + "`bl ready`" + ` before starting work
+- Mark tasks ` + "`in_progress`" + ` when you start working on them
 - Create tasks for any new work you discover
 - Close tasks when complete - this unblocks dependent tasks
 - Use ` + "`--json`" + ` flag when you need to parse output programmatically

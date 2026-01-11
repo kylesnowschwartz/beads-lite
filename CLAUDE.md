@@ -12,7 +12,8 @@ bl ready              # what can I work on?
 bl list --tree        # see all tasks with dependencies
 bl create "title"     # new task
 bl close <id>         # complete task
-bl update <a> --blocked-by <b>  # a blocked by b
+bl update <id> --status in_progress  # claim work
+bl update <a> --blocked-by <b>       # a blocked by b
 ```
 
 ## Development Rules
@@ -27,12 +28,12 @@ bl update <a> --blocked-by <b>  # a blocked by b
 
 Pushes to main auto-tag releases based on commit prefix:
 
-| Prefix | Version Bump | Example |
-|--------|--------------|---------|
-| `fix:` | Patch (0.0.X) | `fix: handle nil pointer in export` |
-| `perf:` | Patch (0.0.X) | `perf: batch dependency queries` |
-| `feat:` | Minor (0.X.0) | `feat: add --filter flag to list` |
-| `feat!:` or `BREAKING CHANGE` | Major (X.0.0) | `feat!: change ID format` |
+| Prefix                        | Version Bump   | Example                             |
+| --------                      | -------------- | ---------                           |
+| `fix:`                        | Patch (0.0.X)  | `fix: handle nil pointer in export` |
+| `perf:`                       | Patch (0.0.X)  | `perf: batch dependency queries`    |
+| `feat:`                       | Minor (0.X.0)  | `feat: add --filter flag to list`   |
+| `feat!:` or `BREAKING CHANGE` | Major (X.0.0)  | `feat!: change ID format`           |
 
 **No release** (docs, tests, chore):
 - `docs:`, `test:`, `chore:`, `style:`, `ci:` - no version bump
