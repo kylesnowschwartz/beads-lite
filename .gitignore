@@ -1,3 +1,6 @@
 # Binary
 /bl
 /cmd/bl/bl
+
+# Local beads database
+.beads/
