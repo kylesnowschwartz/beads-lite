@@ -76,7 +76,6 @@ type Issue struct {
 	Status      Status     `json:"status"`
 	Priority    int        `json:"priority"` // 0-4 (P0 = critical, P4 = lowest)
 	Type        IssueType  `json:"issue_type"`
-	Labels      []string   `json:"labels,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at,omitempty"`

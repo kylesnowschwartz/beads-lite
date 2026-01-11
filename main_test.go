@@ -421,6 +421,20 @@ func TestCLI_Export_File(t *testing.T) {
 	}
 }
 
+func TestCLI_Export_InvalidPath(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "Task"})
+
+	_, err := runCLI([]string{"export", "/nonexistent/dir/backup.jsonl"})
+	if err == nil {
+		t.Error("export to invalid path should fail")
+	}
+	if !strings.Contains(err.Error(), "no such file or directory") {
+		t.Errorf("error should mention path not found, got: %v", err)
+	}
+}
+
 func TestCLI_Import(t *testing.T) {
 	setupTestDir(t)
 
@@ -454,6 +468,19 @@ func TestCLI_Import_NoFile(t *testing.T) {
 	_, err := runCLI([]string{"import"})
 	if err == nil {
 		t.Error("import without file should fail")
+	}
+}
+
+func TestCLI_Import_FileNotFound(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"import", "nonexistent.jsonl"})
+	if err == nil {
+		t.Error("import with nonexistent file should fail")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error should mention file not found, got: %v", err)
 	}
 }
 
@@ -1019,6 +1046,19 @@ func TestCLI_Delete_NotFound(t *testing.T) {
 	_, err := runCLI([]string{"delete", "bl-9999", "--confirm"})
 	if err == nil {
 		t.Error("delete non-existent should fail")
+	}
+}
+
+func TestCLI_Delete_NoID(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"delete", "--confirm"})
+	if err == nil {
+		t.Error("delete without ID should fail")
+	}
+	if !strings.Contains(err.Error(), "usage") {
+		t.Errorf("error should mention usage, got: %v", err)
 	}
 }
 

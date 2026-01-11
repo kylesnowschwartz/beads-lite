@@ -83,13 +83,6 @@ func (s *Store) initSchema() error {
 		FOREIGN KEY (depends_on_id) REFERENCES issues(id)
 	);
 
-	CREATE TABLE IF NOT EXISTS labels (
-		issue_id TEXT NOT NULL,
-		label TEXT NOT NULL,
-		PRIMARY KEY (issue_id, label),
-		FOREIGN KEY (issue_id) REFERENCES issues(id)
-	);
-
 	CREATE INDEX IF NOT EXISTS idx_deps_type ON dependencies(type, depends_on_id);
 	CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 	`

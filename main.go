@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/pflag"
 	flag "github.com/spf13/pflag"
 )
 
@@ -106,7 +105,10 @@ Update Flags:
   --unblock <id>        Remove blocker (repeatable)
 
 Close Flags:
-  --resolution <string> Resolution (done, wontfix, duplicate), default done`)
+  --resolution <string> Resolution (done, wontfix, duplicate), default done
+
+Delete Flags:
+  --confirm             Required to confirm permanent deletion`)
 }
 
 func getDBPath() string {
@@ -496,7 +498,7 @@ func cmdDelete(args []string, w io.Writer) error {
 
 // cmdClose closes an issue
 func cmdClose(args []string, w io.Writer) error {
-	fs := pflag.NewFlagSet("close", pflag.ContinueOnError)
+	fs := flag.NewFlagSet("close", flag.ContinueOnError)
 	resolutionFlag := fs.String("resolution", "done", "Resolution reason (done, wontfix, duplicate)")
 	fs.SetOutput(w)
 
