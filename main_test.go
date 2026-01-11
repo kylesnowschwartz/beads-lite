@@ -1699,6 +1699,51 @@ func TestCLI_Update_InvalidType(t *testing.T) {
 	}
 }
 
+func TestCLI_Update_NoFlags(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	// Update with no flags should succeed (updates updated_at timestamp)
+	out, err := runCLI([]string{"update", id})
+	if err != nil {
+		t.Errorf("update with no flags should succeed: %v", err)
+	}
+	if !strings.Contains(out, "Updated "+id) {
+		t.Errorf("expected success message, got: %s", out)
+	}
+}
+
+func TestCLI_List_Empty_JSON(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// List with --json on empty database should output nothing
+	out, err := runCLI([]string{"list", "--json"})
+	if err != nil {
+		t.Fatalf("list --json on empty database should succeed: %v", err)
+	}
+	if out != "" {
+		t.Errorf("expected empty output for empty database with --json, got: %s", out)
+	}
+}
+
+func TestCLI_Ready_Empty_JSON(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Ready with --json on empty database should output nothing
+	out, err := runCLI([]string{"ready", "--json"})
+	if err != nil {
+		t.Fatalf("ready --json on empty database should succeed: %v", err)
+	}
+	if out != "" {
+		t.Errorf("expected empty output for empty database with --json, got: %s", out)
+	}
+}
+
 func TestCLI_Export_EmptyDatabase(t *testing.T) {
 	setupTestDir(t)
 	runCLI([]string{"init"})
