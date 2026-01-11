@@ -116,6 +116,10 @@ func ExportToFile(store *Store, path string) error {
 // ImportFromJSONL reads issues from the reader in JSONL format.
 // Uses upsert semantics: updates existing issues, creates new ones.
 // The entire import is wrapped in a transaction for consistency.
+//
+// Two-phase import: issues first, then dependencies. This handles JSONL files
+// where dependencies may reference issues that appear later in the file
+// (e.g., alphabetically sorted exports where bl-g9d5 depends on bl-it9o).
 func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 	stats := &ImportStats{}
 
@@ -135,18 +139,25 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 		return nil, fmt.Errorf("read error: %w", err)
 	}
 
-	// Process all lines within a transaction
-	err := store.WithTransaction(func() error {
-		for lineNum, line := range lines {
-			var export IssueExport
-			if err := json.Unmarshal(line, &export); err != nil {
-				return fmt.Errorf("line %d: parse error: %w", lineNum+1, err)
-			}
+	// Parse all exports upfront
+	exports := make([]IssueExport, 0, len(lines))
+	for lineNum, line := range lines {
+		var export IssueExport
+		if err := json.Unmarshal(line, &export); err != nil {
+			return nil, fmt.Errorf("line %d: parse error: %w", lineNum+1, err)
+		}
+		exports = append(exports, export)
+	}
 
-			// Check if issue exists
+	// Process within a transaction
+	err := store.WithTransaction(func() error {
+		// Phase 1: Create/update all issues (without dependencies)
+		for i, export := range exports {
+			lineNum := i + 1
+
 			existing, err := store.GetIssue(export.ID)
 			if err != nil && !errors.Is(err, ErrIssueNotFound) {
-				return fmt.Errorf("line %d: check existing: %w", lineNum+1, err)
+				return fmt.Errorf("line %d: check existing: %w", lineNum, err)
 			}
 
 			issue := &Issue{
@@ -163,31 +174,35 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 			}
 
 			if existing != nil {
-				// Update existing issue
 				if err := store.UpdateIssue(issue); err != nil {
-					return fmt.Errorf("line %d: update issue: %w", lineNum+1, err)
+					return fmt.Errorf("line %d: update issue: %w", lineNum, err)
 				}
 				stats.Updated++
-
-				// Clear existing dependencies before re-adding
-				if err := store.RemoveAllDependencies(issue.ID); err != nil {
-					return fmt.Errorf("line %d: remove deps: %w", lineNum+1, err)
-				}
 			} else {
-				// Create new issue
 				if err := store.CreateIssue(issue); err != nil {
-					return fmt.Errorf("line %d: create issue: %w", lineNum+1, err)
+					return fmt.Errorf("line %d: create issue: %w", lineNum, err)
 				}
 				stats.Created++
 			}
+		}
 
-			// Add dependencies
+		// Phase 2: Clear old dependencies and add new ones
+		// Now all issues exist, so FK constraints will be satisfied
+		for i, export := range exports {
+			lineNum := i + 1
+
+			// Clear existing dependencies before re-adding
+			if err := store.RemoveAllDependencies(export.ID); err != nil {
+				return fmt.Errorf("line %d: remove deps: %w", lineNum, err)
+			}
+
 			for _, dep := range export.Dependencies {
-				if err := store.AddDependency(issue.ID, dep.DependsOn, dep.Type); err != nil {
-					return fmt.Errorf("line %d: add dependency: %w", lineNum+1, err)
+				if err := store.AddDependency(export.ID, dep.DependsOn, dep.Type); err != nil {
+					return fmt.Errorf("line %d: add dependency: %w", lineNum, err)
 				}
 			}
 		}
+
 		return nil
 	})
 
