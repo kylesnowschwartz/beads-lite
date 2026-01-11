@@ -39,6 +39,25 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// WithTransaction executes the given function within a database transaction.
+// If fn returns an error, the transaction is rolled back. Otherwise, it is committed.
+func (s *Store) WithTransaction(fn func() error) error {
+	if _, err := s.db.Exec("BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if err := fn(); err != nil {
+		s.db.Exec("ROLLBACK")
+		return err
+	}
+
+	if _, err := s.db.Exec("COMMIT"); err != nil {
+		s.db.Exec("ROLLBACK")
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) initSchema() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS issues (

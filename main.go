@@ -66,33 +66,35 @@ func printHelp(w io.Writer) {
 Commands:
   init                  Initialize .beads-lite/ directory and database
   create <title>        Create a new issue, prints ID
-  list [--json] [--tree] List all issues
-  show <id> [--json]    Show issue details
-  update <id> [flags]   Update an issue (including blockers)
-  delete <id> --confirm Delete an issue permanently
+  list                  List all issues
+  show <id>             Show issue details
+  update <id>           Update an issue (including blockers)
+  delete <id>           Delete an issue permanently (requires --confirm)
   close <id>            Close an issue
-  ready [--json]        List unblocked work
+  ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
   onboard               Print Claude Code integration instructions
 
-List/Ready flags:
+List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
-  --tree                Show dependency tree (list and ready)
-  --status <string>     Filter by status (open, in_progress, closed) (list only)
-  --priority <int>      Filter by priority (0-4) (list and ready)
-  --type <string>       Filter by type (task, bug, feature, epic) (list and ready)
+  --tree                Show dependency tree
+  --priority <int>      Filter by priority (0-4)
+  --type <string>       Filter by type (task, bug, feature, epic)
 
-Show flags:
+List-Only Flags:
+  --status <string>     Filter by status (open, in_progress, closed)
+
+Show Flags:
   --json                Output as JSON
 
-Create flags:
+Create Flags:
   --description <text>  Issue description
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
 
-Update flags:
+Update Flags:
   --title <string>      New title
   --status <string>     New status (open, in_progress, closed)
   --priority <int>      New priority (0-4)
@@ -168,14 +170,8 @@ func cmdCreate(args []string, w io.Writer) error {
 	}
 
 	// Add dependencies if specified
-	for _, blockerID := range *blockedBy {
-		// Verify blocker exists
-		if _, err := store.GetIssue(blockerID); err != nil {
-			return fmt.Errorf("blocker %s: %w", blockerID, err)
-		}
-		if err := store.AddDependency(issue.ID, blockerID, DepBlocks); err != nil {
-			return fmt.Errorf("failed to add dependency: %w", err)
-		}
+	if err := addBlockers(store, issue.ID, *blockedBy); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(w, "Created %s: %s\n", issue.ID, issue.Title)
@@ -215,20 +211,30 @@ func cmdList(args []string, w io.Writer) error {
 	// Apply filters
 	issues = filterIssues(issues, *statusFilter, *priorityFilter, *typeFilter)
 
+	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
+}
+
+// formatIssueLine returns a formatted string for displaying an issue in list/ready output.
+func formatIssueLine(issue *Issue) string {
+	return fmt.Sprintf("%s  %-11s  P%d  %s  %s",
+		issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
+}
+
+// outputIssues handles the common output logic for list and ready commands.
+func outputIssues(store *Store, issues []*Issue, w io.Writer, jsonOut, treeOut bool) error {
 	if len(issues) == 0 {
-		if *jsonFlag {
-			// Empty JSONL output is just empty
+		if jsonOut {
 			return nil
 		}
 		fmt.Fprintln(w, "No issues found")
 		return nil
 	}
 
-	if *jsonFlag {
+	if jsonOut {
 		return outputIssuesJSON(store, issues, w)
 	}
 
-	if *treeFlag {
+	if treeOut {
 		return outputIssuesTree(store, issues, w)
 	}
 
@@ -238,10 +244,21 @@ func cmdList(args []string, w io.Writer) error {
 	return nil
 }
 
-// formatIssueLine returns a formatted string for displaying an issue in list/ready output.
-func formatIssueLine(issue *Issue) string {
-	return fmt.Sprintf("%s  %-11s  P%d  %s  %s",
-		issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
+// addBlockers adds blocker dependencies for an issue, validating that each blocker exists
+// and preventing self-references.
+func addBlockers(store *Store, issueID string, blockerIDs []string) error {
+	for _, blockerID := range blockerIDs {
+		if blockerID == issueID {
+			return errors.New("issue cannot block itself")
+		}
+		if _, err := store.GetIssue(blockerID); err != nil {
+			return fmt.Errorf("blocker issue %s: %w", blockerID, err)
+		}
+		if err := store.AddDependency(issueID, blockerID, DepBlocks); err != nil {
+			return fmt.Errorf("blocker issue %s: %w", blockerID, err)
+		}
+	}
+	return nil
 }
 
 // filterIssues applies status, priority, and type filters to a slice of issues.
@@ -357,7 +374,7 @@ func cmdUpdate(args []string, w io.Writer) error {
 	priority := fs.Int("priority", -1, "New priority (0-4)")
 	issueType := fs.String("type", "", "New type")
 	description := fs.String("description", "", "New description")
-	addBlockers := fs.StringSlice("blocked-by", nil, "Add blocker (repeatable)")
+	addBlockersFlag := fs.StringSlice("blocked-by", nil, "Add blocker (repeatable)")
 	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
 
 	if err := fs.Parse(flagArgs); err != nil {
@@ -396,28 +413,18 @@ func cmdUpdate(args []string, w io.Writer) error {
 	}
 
 	// Handle blocker additions
-	for _, blockerID := range *addBlockers {
-		// Verify blocker exists
-		if _, err := store.GetIssue(blockerID); err != nil {
-			return fmt.Errorf("blocker %s: %w", blockerID, err)
-		}
-		// Prevent self-reference
-		if blockerID == id {
-			return errors.New("issue cannot block itself")
-		}
-		if err := store.AddDependency(id, blockerID, DepBlocks); err != nil {
-			return fmt.Errorf("add blocker %s: %w", blockerID, err)
-		}
+	if err := addBlockers(store, id, *addBlockersFlag); err != nil {
+		return err
 	}
 
 	// Handle blocker removals
 	for _, blockerID := range *rmBlockers {
 		if err := store.RemoveDependency(id, blockerID, DepBlocks); err != nil {
-			return fmt.Errorf("remove blocker %s: %w", blockerID, err)
+			return fmt.Errorf("blocker issue %s: %w", blockerID, err)
 		}
 	}
 
-	fmt.Fprintf(w, "Updated %s\n", id)
+	fmt.Fprintf(w, "Updated %s: %s\n", id, issue.Title)
 	return nil
 }
 
@@ -476,7 +483,8 @@ func cmdClose(args []string, w io.Writer) error {
 	defer store.Close()
 
 	// Verify issue exists first
-	if _, err := store.GetIssue(id); err != nil {
+	issue, err := store.GetIssue(id)
+	if err != nil {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
@@ -484,7 +492,7 @@ func cmdClose(args []string, w io.Writer) error {
 		return fmt.Errorf("failed to close: %w", err)
 	}
 
-	fmt.Fprintf(w, "Closed %s\n", id)
+	fmt.Fprintf(w, "Closed %s: %s\n", id, issue.Title)
 	return nil
 }
 
@@ -520,26 +528,7 @@ func cmdReady(args []string, w io.Writer) error {
 	// Apply filters (no status filter - ready work is already filtered to open/in_progress)
 	issues = filterIssues(issues, "", *priorityFilter, *typeFilter)
 
-	if len(issues) == 0 {
-		if *jsonFlag {
-			return nil
-		}
-		fmt.Fprintln(w, "No ready work")
-		return nil
-	}
-
-	if *jsonFlag {
-		return outputIssuesJSON(store, issues, w)
-	}
-
-	if *treeFlag {
-		return outputIssuesTree(store, issues, w)
-	}
-
-	for _, issue := range issues {
-		fmt.Fprintln(w, formatIssueLine(issue))
-	}
-	return nil
+	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
 }
 
 // cmdExport exports all issues to JSONL format
@@ -595,14 +584,7 @@ func outputIssuesJSON(store *Store, issues []*Issue, w io.Writer) error {
 		return fmt.Errorf("get all dependencies: %w", err)
 	}
 
-	encoder := json.NewEncoder(w)
-	for _, issue := range issues {
-		export := toIssueExport(issue, allDeps[issue.ID])
-		if err := encoder.Encode(export); err != nil {
-			return err
-		}
-	}
-	return nil
+	return WriteIssuesAsJSONL(issues, allDeps, w)
 }
 
 // outputSingleIssueJSON outputs a single issue as JSON (not JSONL)

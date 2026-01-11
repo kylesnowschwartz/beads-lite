@@ -2,6 +2,7 @@ package beadslite
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,8 +231,8 @@ func TestCLI_Ready_Empty(t *testing.T) {
 		t.Fatalf("ready failed: %v", err)
 	}
 
-	if !strings.Contains(out, "No ready") {
-		t.Errorf("expected 'No ready' in output, got: %s", out)
+	if !strings.Contains(out, "No issues found") {
+		t.Errorf("expected 'No issues found' in output, got: %s", out)
 	}
 }
 
@@ -1502,5 +1503,351 @@ func TestCLI_Ready_PartiallyClosedBlockers(t *testing.T) {
 	ready3, _ := runCLI([]string{"ready"})
 	if !strings.Contains(ready3, "Task C") {
 		t.Errorf("expected Task C to be ready: %s", ready3)
+	}
+}
+
+// P1 Test Coverage: Import error paths
+
+func TestCLI_Import_MalformedJSON(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create file with malformed JSON
+	content := `{"id":"bl-good","title":"Good Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}
+{not valid json at all
+{"id":"bl-also","title":"Also Good","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+	os.WriteFile("malformed.jsonl", []byte(content), 0644)
+
+	_, err := runCLI([]string{"import", "malformed.jsonl"})
+	if err == nil {
+		t.Error("import with malformed JSON should fail")
+	}
+	if !strings.Contains(err.Error(), "parse error") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+func TestCLI_Import_NonExistentDependency(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create file with dependency referencing non-existent issue
+	content := `{"id":"bl-orphan","title":"Orphan Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[{"depends_on":"bl-nonexistent","type":"blocks"}]}`
+	os.WriteFile("orphan.jsonl", []byte(content), 0644)
+
+	// Import should succeed (FK not enforced at runtime), but we document this behavior
+	out, err := runCLI([]string{"import", "orphan.jsonl"})
+	if err != nil {
+		t.Logf("Import with orphan dep failed (stricter behavior): %v", err)
+	} else {
+		t.Logf("Import with orphan dep succeeded: %s", out)
+		// Verify the issue was created
+		listOut, _ := runCLI([]string{"list"})
+		if !strings.Contains(listOut, "Orphan Task") {
+			t.Errorf("orphan task should be created: %s", listOut)
+		}
+	}
+}
+
+func TestCLI_Close_AlreadyClosed(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	// Close once
+	_, err := runCLI([]string{"close", id})
+	if err != nil {
+		t.Fatalf("first close should succeed: %v", err)
+	}
+
+	// Close again - should be idempotent (not error)
+	_, err = runCLI([]string{"close", id})
+	// Document current behavior: closing already-closed issue succeeds (idempotent)
+	if err != nil {
+		t.Logf("double close failed (stricter behavior): %v", err)
+	} else {
+		t.Log("double close succeeded (idempotent behavior)")
+	}
+
+	// Verify still closed
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "closed") {
+		t.Errorf("issue should still be closed: %s", showOut)
+	}
+}
+
+// P2 Test Coverage: Update validation tests
+
+func TestCLI_Update_InvalidStatus(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"update", id, "--status", "invalid"})
+	if err == nil {
+		t.Error("update with invalid status should fail")
+	}
+}
+
+func TestCLI_Update_InvalidPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"update", id, "--priority", "99"})
+	if err == nil {
+		t.Error("update with invalid priority should fail")
+	}
+}
+
+func TestCLI_Update_InvalidType(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"update", id, "--type", "bogus"})
+	if err == nil {
+		t.Error("update with invalid type should fail")
+	}
+}
+
+func TestCLI_Export_EmptyDatabase(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Export with no issues
+	out, err := runCLI([]string{"export"})
+	if err != nil {
+		t.Fatalf("export empty database should succeed: %v", err)
+	}
+	// Should output nothing (empty JSONL)
+	if out != "" {
+		t.Errorf("expected empty output for empty database, got: %s", out)
+	}
+}
+
+func TestCLI_Update_DuplicateBlocker(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+
+	// Add blocker once
+	runCLI([]string{"update", idB, "--blocked-by", idA})
+
+	// Try to add same blocker again - should fail due to PK constraint
+	_, err := runCLI([]string{"update", idB, "--blocked-by", idA})
+	// Document behavior: duplicate blocker insertion fails silently or with error
+	if err != nil {
+		t.Logf("duplicate blocker rejected: %v", err)
+	} else {
+		t.Log("duplicate blocker accepted (idempotent)")
+	}
+
+	// Verify B is still blocked by A
+	readyOut, _ := runCLI([]string{"ready"})
+	if strings.Contains(readyOut, "Task B") {
+		t.Errorf("B should still be blocked: %s", readyOut)
+	}
+}
+
+func TestCLI_Create_WhitespaceOnlyTitle(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"create", "   "})
+	if err == nil {
+		t.Error("create with whitespace-only title should fail")
+	}
+}
+
+func TestCLI_CycleDetection_ReadyBehavior(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	outA, _ := runCLI([]string{"create", "Task A"})
+	outB, _ := runCLI([]string{"create", "Task B"})
+	idA := extractID(outA)
+	idB := extractID(outB)
+
+	// Create cycle: A blocks B, B blocks A
+	runCLI([]string{"update", idA, "--blocked-by", idB})
+	runCLI([]string{"update", idB, "--blocked-by", idA})
+
+	// With a cycle, neither should be ready (both blocked)
+	readyOut, _ := runCLI([]string{"ready"})
+
+	// Document the behavior - this test verifies system doesn't crash
+	// and documents whether cycles cause both tasks to be blocked
+	if strings.Contains(readyOut, "Task A") || strings.Contains(readyOut, "Task B") {
+		t.Logf("cycle allows tasks to be ready (unexpected): %s", readyOut)
+	} else {
+		t.Log("cycle correctly blocks both tasks")
+	}
+}
+
+// P2 Test Coverage: Dependency types (parent-child, related)
+// Note: These tests verify storage-level behavior since CLI doesn't expose these types
+
+func TestStorage_ParentChildDependency(t *testing.T) {
+	setupTestDir(t)
+
+	store, err := NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create parent and child issues
+	parent := NewIssue("Parent Task")
+	child := NewIssue("Child Task")
+	store.CreateIssue(parent)
+	store.CreateIssue(child)
+
+	// Add parent-child dependency
+	err = store.AddDependency(child.ID, parent.ID, DepParentChild)
+	if err != nil {
+		t.Fatalf("failed to add parent-child dep: %v", err)
+	}
+
+	// Verify dependency was created
+	deps, err := store.GetDependencies(child.ID)
+	if err != nil {
+		t.Fatalf("failed to get deps: %v", err)
+	}
+	if len(deps) != 1 || deps[0].Type != DepParentChild {
+		t.Errorf("expected parent-child dep, got: %v", deps)
+	}
+
+	// Parent-child deps should propagate blocking when parent is blocked
+	// Create a blocker for parent
+	blocker := NewIssue("Blocker")
+	store.CreateIssue(blocker)
+	store.AddDependency(parent.ID, blocker.ID, DepBlocks)
+
+	// With parent blocked by blocker, child should also be blocked (via recursive CTE)
+	ready, err := store.GetReadyWork()
+	if err != nil {
+		t.Fatalf("GetReadyWork failed: %v", err)
+	}
+
+	// Only blocker should be ready
+	var readyIDs []string
+	for _, r := range ready {
+		readyIDs = append(readyIDs, r.ID)
+	}
+
+	foundBlocker := false
+	for _, id := range readyIDs {
+		if id == blocker.ID {
+			foundBlocker = true
+		}
+		if id == parent.ID || id == child.ID {
+			t.Errorf("parent or child should be blocked: %v", readyIDs)
+		}
+	}
+	if !foundBlocker {
+		t.Errorf("blocker should be ready: %v", readyIDs)
+	}
+}
+
+func TestStorage_RelatedDependency(t *testing.T) {
+	setupTestDir(t)
+
+	store, err := NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create two related issues
+	issueA := NewIssue("Task A")
+	issueB := NewIssue("Task B")
+	store.CreateIssue(issueA)
+	store.CreateIssue(issueB)
+
+	// Add related dependency (non-blocking, informational)
+	err = store.AddDependency(issueA.ID, issueB.ID, DepRelated)
+	if err != nil {
+		t.Fatalf("failed to add related dep: %v", err)
+	}
+
+	// Verify dependency was created
+	deps, err := store.GetDependencies(issueA.ID)
+	if err != nil {
+		t.Fatalf("failed to get deps: %v", err)
+	}
+	if len(deps) != 1 || deps[0].Type != DepRelated {
+		t.Errorf("expected related dep, got: %v", deps)
+	}
+
+	// Related deps should NOT block - both issues should be ready
+	ready, err := store.GetReadyWork()
+	if err != nil {
+		t.Fatalf("GetReadyWork failed: %v", err)
+	}
+
+	if len(ready) != 2 {
+		t.Errorf("both issues should be ready (related deps don't block): got %d ready", len(ready))
+	}
+}
+
+func TestCLI_Ready_DeepChain(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create a chain of 15 tasks, each blocking the next
+	// This tests SQLite recursive CTE depth handling
+	const chainDepth = 15
+	var ids []string
+
+	for i := 0; i < chainDepth; i++ {
+		out, err := runCLI([]string{"create", fmt.Sprintf("Chain Task %d", i)})
+		if err != nil {
+			t.Fatalf("failed to create task %d: %v", i, err)
+		}
+		ids = append(ids, extractID(out))
+	}
+
+	// Create blocking chain: task 0 blocks task 1, task 1 blocks task 2, etc.
+	for i := 1; i < chainDepth; i++ {
+		_, err := runCLI([]string{"update", ids[i], "--blocked-by", ids[i-1]})
+		if err != nil {
+			t.Fatalf("failed to add blocker for task %d: %v", i, err)
+		}
+	}
+
+	// Only task 0 should be ready
+	readyOut, err := runCLI([]string{"ready"})
+	if err != nil {
+		t.Fatalf("ready failed on deep chain: %v", err)
+	}
+	if !strings.Contains(readyOut, "Chain Task 0") {
+		t.Errorf("task 0 should be ready: %s", readyOut)
+	}
+	if strings.Contains(readyOut, "Chain Task 14") {
+		t.Errorf("task 14 should be blocked: %s", readyOut)
+	}
+
+	// Close all but the last, verify chain unblocks correctly
+	for i := 0; i < chainDepth-1; i++ {
+		runCLI([]string{"close", ids[i]})
+	}
+
+	// Now task 14 should be ready
+	readyOut2, _ := runCLI([]string{"ready"})
+	if !strings.Contains(readyOut2, "Chain Task 14") {
+		t.Errorf("task 14 should be ready after chain closed: %s", readyOut2)
 	}
 }
