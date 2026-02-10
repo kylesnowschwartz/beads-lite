@@ -619,19 +619,195 @@ func TestCLI_Ready_Tree(t *testing.T) {
 	// Add blocker (child blocked by parent)
 	runCLI([]string{"update", childID, "--blocked-by", parentID})
 
-	// Ready --tree should show hierarchical view
+	// Ready --tree should show parent as root with blocked child underneath
 	out, err := runCLI([]string{"ready", "--tree"})
 	if err != nil {
 		t.Fatalf("ready --tree failed: %v", err)
 	}
 
-	// Should show parent (the only ready task, since child is blocked)
+	// Parent should be the root (it's ready)
 	if !strings.Contains(out, "Parent Task") {
 		t.Errorf("expected Parent Task in tree output: %s", out)
 	}
-	// Child should NOT be shown (it's blocked)
-	if strings.Contains(out, "Child Task") {
-		t.Errorf("Child Task should not appear in ready tree (it's blocked): %s", out)
+	// Child should appear nested under parent (blocked children shown in tree)
+	if !strings.Contains(out, "Child Task") {
+		t.Errorf("expected Child Task nested under parent in ready tree: %s", out)
+	}
+	// Should have tree drawing characters showing hierarchy
+	if !strings.Contains(out, "└──") && !strings.Contains(out, "├──") {
+		t.Errorf("expected tree drawing characters: %s", out)
+	}
+}
+
+func TestCLI_Show_Tree(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create epic with child tasks
+	epicOut, _ := runCLI([]string{"create", "Auth Epic", "--type", "epic"})
+	epicID := extractID(epicOut)
+	childOut1, _ := runCLI([]string{"create", "Login Endpoint"})
+	child1ID := extractID(childOut1)
+	childOut2, _ := runCLI([]string{"create", "Logout Endpoint"})
+	child2ID := extractID(childOut2)
+	grandchildOut, _ := runCLI([]string{"create", "Session Storage"})
+	grandchildID := extractID(grandchildOut)
+
+	// Child tasks blocked by epic, grandchild blocked by child1
+	runCLI([]string{"update", child1ID, "--blocked-by", epicID})
+	runCLI([]string{"update", child2ID, "--blocked-by", epicID})
+	runCLI([]string{"update", grandchildID, "--blocked-by", child1ID})
+
+	// Show epic --tree should display the full subtree
+	out, err := runCLI([]string{"show", epicID, "--tree"})
+	if err != nil {
+		t.Fatalf("show --tree failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Auth Epic") {
+		t.Errorf("expected epic in output: %s", out)
+	}
+	if !strings.Contains(out, "Login Endpoint") {
+		t.Errorf("expected Login Endpoint in tree: %s", out)
+	}
+	if !strings.Contains(out, "Logout Endpoint") {
+		t.Errorf("expected Logout Endpoint in tree: %s", out)
+	}
+	if !strings.Contains(out, "Session Storage") {
+		t.Errorf("expected Session Storage (grandchild) in tree: %s", out)
+	}
+	// Should have tree drawing characters
+	if !strings.Contains(out, "└──") && !strings.Contains(out, "├──") {
+		t.Errorf("expected tree drawing characters: %s", out)
+	}
+}
+
+func TestCLI_Show_Tree_LeafNode(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Show tree for a task with no dependents
+	createOut, _ := runCLI([]string{"create", "Standalone Task"})
+	id := extractID(createOut)
+
+	out, err := runCLI([]string{"show", id, "--tree"})
+	if err != nil {
+		t.Fatalf("show --tree on leaf failed: %v", err)
+	}
+	if !strings.Contains(out, "Standalone Task") {
+		t.Errorf("expected task in output: %s", out)
+	}
+	// No tree characters for a leaf
+	if strings.Contains(out, "└──") || strings.Contains(out, "├──") {
+		t.Errorf("leaf should have no tree children: %s", out)
+	}
+}
+
+func TestCLI_Create_WithEpic(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create an epic
+	epicOut, _ := runCLI([]string{"create", "My Epic", "--type", "epic"})
+	epicID := extractID(epicOut)
+
+	// Create a task under the epic
+	taskOut, err := runCLI([]string{"create", "Child Task", "--epic", epicID})
+	if err != nil {
+		t.Fatalf("create with --epic failed: %v", err)
+	}
+	taskID := extractID(taskOut)
+
+	// Task should appear under epic in tree
+	treeOut, _ := runCLI([]string{"list", "--tree"})
+	if !strings.Contains(treeOut, "└──") {
+		t.Errorf("expected tree child, got:\n%s", treeOut)
+	}
+
+	// Task should still appear in ready (parent link is non-blocking)
+	readyOut, _ := runCLI([]string{"ready"})
+	if !strings.Contains(readyOut, taskID) {
+		t.Errorf("task should be ready (parent is non-blocking), got:\n%s", readyOut)
+	}
+}
+
+func TestCLI_Create_EpicMustBeEpic(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Create a regular task
+	taskOut, _ := runCLI([]string{"create", "Not An Epic"})
+	taskID := extractID(taskOut)
+
+	// Trying to use a non-epic as --epic should fail
+	_, err := runCLI([]string{"create", "Child", "--epic", taskID})
+	if err == nil {
+		t.Error("--epic on non-epic issue should fail")
+	}
+	if !strings.Contains(err.Error(), "not epic") {
+		t.Errorf("expected 'not epic' error, got: %v", err)
+	}
+}
+
+func TestCLI_Update_Epic(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	epicOut, _ := runCLI([]string{"create", "Epic", "--type", "epic"})
+	epicID := extractID(epicOut)
+
+	taskOut, _ := runCLI([]string{"create", "Orphan Task"})
+	taskID := extractID(taskOut)
+
+	// Link task to epic via update
+	_, err := runCLI([]string{"update", taskID, "--epic", epicID})
+	if err != nil {
+		t.Fatalf("update --epic failed: %v", err)
+	}
+
+	// Should appear in tree
+	treeOut, _ := runCLI([]string{"list", "--tree"})
+	if !strings.Contains(treeOut, "└──") {
+		t.Errorf("expected tree child after update --epic, got:\n%s", treeOut)
+	}
+
+	// Remove epic link
+	_, err = runCLI([]string{"update", taskID, "--remove-epic", epicID})
+	if err != nil {
+		t.Fatalf("update --remove-epic failed: %v", err)
+	}
+
+	// Should no longer be in tree
+	treeOut2, _ := runCLI([]string{"list", "--tree"})
+	if strings.Contains(treeOut2, "└──") {
+		t.Errorf("expected no tree child after --remove-epic, got:\n%s", treeOut2)
+	}
+}
+
+func TestCLI_Ready_Tree_WithEpic(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	epicOut, _ := runCLI([]string{"create", "Feature Epic", "--type", "epic"})
+	epicID := extractID(epicOut)
+
+	runCLI([]string{"create", "Task A", "--epic", epicID})
+	runCLI([]string{"create", "Task B", "--epic", epicID})
+
+	// ready --tree should show epic with children
+	treeOut, err := runCLI([]string{"ready", "--tree"})
+	if err != nil {
+		t.Fatalf("ready --tree failed: %v", err)
+	}
+
+	if !strings.Contains(treeOut, "Feature Epic") {
+		t.Errorf("expected epic in ready tree, got:\n%s", treeOut)
+	}
+	if !strings.Contains(treeOut, "Task A") {
+		t.Errorf("expected Task A in ready tree, got:\n%s", treeOut)
+	}
+	if !strings.Contains(treeOut, "├──") || !strings.Contains(treeOut, "└──") {
+		t.Errorf("expected tree drawing characters, got:\n%s", treeOut)
 	}
 }
 
@@ -1308,6 +1484,33 @@ func TestCLI_Create_AllFlagsCombined(t *testing.T) {
 	}
 }
 
+func TestCLI_Create_WithPrefixPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// P-prefix format
+	out, err := runCLI([]string{"create", "P0 Bug", "--priority", "p0"})
+	if err != nil {
+		t.Fatalf("create with p0 failed: %v", err)
+	}
+	id := extractID(out)
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "P0") {
+		t.Errorf("expected P0 priority, got: %s", showOut)
+	}
+
+	// Case-insensitive
+	out2, err := runCLI([]string{"create", "P3 Feature", "--priority", "P3"})
+	if err != nil {
+		t.Fatalf("create with P3 failed: %v", err)
+	}
+	id2 := extractID(out2)
+	showOut2, _ := runCLI([]string{"show", id2})
+	if !strings.Contains(showOut2, "P3") {
+		t.Errorf("expected P3 priority, got: %s", showOut2)
+	}
+}
+
 func TestCLI_Create_InvalidPriority(t *testing.T) {
 	setupTestDir(t)
 	runCLI([]string{"init"})
@@ -1357,10 +1560,22 @@ func TestCLI_List_InvalidPriority(t *testing.T) {
 		t.Error("list with priority 5 should fail")
 	}
 
-	// Negative priority is valid (means "no filter")
+	// Negative priority is invalid
 	_, err = runCLI([]string{"list", "--priority", "-1"})
+	if err == nil {
+		t.Error("list with priority -1 should fail")
+	}
+
+	// P-prefix format should work
+	_, err = runCLI([]string{"list", "--priority", "p2"})
 	if err != nil {
-		t.Errorf("negative priority should be valid (no filter): %v", err)
+		t.Errorf("p-prefix priority should work: %v", err)
+	}
+
+	// Case-insensitive P-prefix
+	_, err = runCLI([]string{"list", "--priority", "P0"})
+	if err != nil {
+		t.Errorf("P-prefix priority should work: %v", err)
 	}
 }
 
@@ -1911,6 +2126,242 @@ func TestCLI_Ready_DeepChain(t *testing.T) {
 	}
 }
 
+// Tests for claim/unclaim commands
+
+func TestCLI_Claim(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task to Claim"})
+	id := extractID(createOut)
+
+	out, err := runCLI([]string{"claim", id, "--agent", "agent-1"})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if !strings.Contains(out, "Claimed") {
+		t.Errorf("expected 'Claimed' in output, got: %s", out)
+	}
+
+	// Verify assignment via show
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "agent-1") {
+		t.Errorf("expected agent-1 in show output, got: %s", showOut)
+	}
+	if !strings.Contains(showOut, "in_progress") {
+		t.Errorf("expected in_progress status, got: %s", showOut)
+	}
+}
+
+func TestCLI_Claim_AlreadyClaimed(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Contested Task"})
+	id := extractID(createOut)
+
+	runCLI([]string{"claim", id, "--agent", "agent-1"})
+
+	_, err := runCLI([]string{"claim", id, "--agent", "agent-2"})
+	if err == nil {
+		t.Error("second claim should fail")
+	}
+	if !strings.Contains(err.Error(), "already claimed") {
+		t.Errorf("expected 'already claimed' error, got: %v", err)
+	}
+}
+
+func TestCLI_Claim_NoAgent(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"claim", id})
+	if err == nil {
+		t.Error("claim without --agent should fail")
+	}
+}
+
+func TestCLI_Claim_NoID(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"claim", "--agent", "agent-1"})
+	if err == nil {
+		t.Error("claim without ID should fail")
+	}
+}
+
+func TestCLI_Claim_NotFound(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"claim", "bl-9999", "--agent", "agent-1"})
+	if err == nil {
+		t.Error("claim non-existent should fail")
+	}
+}
+
+func TestCLI_Unclaim(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Task to Unclaim"})
+	id := extractID(createOut)
+
+	runCLI([]string{"claim", id, "--agent", "agent-1"})
+
+	out, err := runCLI([]string{"unclaim", id})
+	if err != nil {
+		t.Fatalf("unclaim failed: %v", err)
+	}
+	if !strings.Contains(out, "Unclaimed") {
+		t.Errorf("expected 'Unclaimed' in output, got: %s", out)
+	}
+
+	// Verify reset via show
+	showOut, _ := runCLI([]string{"show", id})
+	if strings.Contains(showOut, "agent-1") {
+		t.Errorf("assignment should be cleared: %s", showOut)
+	}
+	if !strings.Contains(showOut, "open") {
+		t.Errorf("status should be reset to open: %s", showOut)
+	}
+}
+
+func TestCLI_Unclaim_NoID(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"unclaim"})
+	if err == nil {
+		t.Error("unclaim without ID should fail")
+	}
+}
+
+func TestCLI_Unclaim_ThenReclaim(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Reclaimable"})
+	id := extractID(createOut)
+
+	// Claim, unclaim, re-claim by different agent
+	runCLI([]string{"claim", id, "--agent", "agent-1"})
+	runCLI([]string{"unclaim", id})
+
+	_, err := runCLI([]string{"claim", id, "--agent", "agent-2"})
+	if err != nil {
+		t.Fatalf("re-claim after unclaim should succeed: %v", err)
+	}
+
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "agent-2") {
+		t.Errorf("expected agent-2 after re-claim: %s", showOut)
+	}
+}
+
+func TestCLI_Ready_Unclaimed(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut1, _ := runCLI([]string{"create", "Claimed Task"})
+	id1 := extractID(createOut1)
+	runCLI([]string{"create", "Unclaimed Task"})
+
+	runCLI([]string{"claim", id1, "--agent", "agent-1"})
+
+	// --unclaimed should hide claimed tasks
+	out, err := runCLI([]string{"ready", "--unclaimed"})
+	if err != nil {
+		t.Fatalf("ready --unclaimed failed: %v", err)
+	}
+	if strings.Contains(out, "Claimed Task") {
+		t.Errorf("claimed task should be hidden with --unclaimed: %s", out)
+	}
+	if !strings.Contains(out, "Unclaimed Task") {
+		t.Errorf("unclaimed task should be visible: %s", out)
+	}
+}
+
+func TestCLI_Ready_AssignedTo(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut1, _ := runCLI([]string{"create", "Agent1 Task"})
+	id1 := extractID(createOut1)
+	createOut2, _ := runCLI([]string{"create", "Agent2 Task"})
+	id2 := extractID(createOut2)
+
+	runCLI([]string{"claim", id1, "--agent", "agent-1"})
+	runCLI([]string{"claim", id2, "--agent", "agent-2"})
+
+	out, err := runCLI([]string{"ready", "--assigned-to", "agent-1"})
+	if err != nil {
+		t.Fatalf("ready --assigned-to failed: %v", err)
+	}
+	if !strings.Contains(out, "Agent1 Task") {
+		t.Errorf("agent-1's task should appear: %s", out)
+	}
+	if strings.Contains(out, "Agent2 Task") {
+		t.Errorf("agent-2's task should be hidden: %s", out)
+	}
+}
+
+func TestCLI_List_AssignedTo(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut1, _ := runCLI([]string{"create", "Agent1 Task"})
+	id1 := extractID(createOut1)
+	runCLI([]string{"create", "Unassigned Task"})
+
+	runCLI([]string{"claim", id1, "--agent", "agent-1"})
+
+	out, err := runCLI([]string{"list", "--assigned-to", "agent-1"})
+	if err != nil {
+		t.Fatalf("list --assigned-to failed: %v", err)
+	}
+	if !strings.Contains(out, "Agent1 Task") {
+		t.Errorf("agent-1's task should appear: %s", out)
+	}
+	if strings.Contains(out, "Unassigned Task") {
+		t.Errorf("unassigned task should be hidden: %s", out)
+	}
+}
+
+func TestCLI_Close_ClearsAssignment(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Assigned Task"})
+	id := extractID(createOut)
+
+	runCLI([]string{"claim", id, "--agent", "agent-1"})
+	runCLI([]string{"close", id})
+
+	showOut, _ := runCLI([]string{"show", id})
+	if strings.Contains(showOut, "Assigned: agent-1") {
+		t.Errorf("closing should clear assignment: %s", showOut)
+	}
+}
+
+func TestCLI_FormatIssueLine_WithAssignment(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Tagged Task"})
+	id := extractID(createOut)
+	runCLI([]string{"claim", id, "--agent", "worker-42"})
+
+	out, _ := runCLI([]string{"list"})
+	if !strings.Contains(out, "[worker-42]") {
+		t.Errorf("expected [worker-42] in list output, got: %s", out)
+	}
+}
+
 // TestCLI_HelpMatchesSubcommandFlags validates that the main help text
 // documents all flags defined by subcommands. This catches drift between
 // the manually-written printHelp() and the auto-generated pflag definitions.
@@ -1928,21 +2379,26 @@ func TestCLI_HelpMatchesSubcommandFlags(t *testing.T) {
 			"--priority",
 			"--type",
 			"--resolution",
+			"--assigned-to",
 		},
 		"ready": {
 			"--json",
 			"--tree",
 			"--priority",
 			"--type",
+			"--unclaimed",
+			"--assigned-to",
 		},
 		"show": {
 			"--json",
+			"--tree",
 		},
 		"create": {
 			"--description",
 			"--priority",
 			"--type",
 			"--blocked-by",
+			"--epic",
 		},
 		"update": {
 			"--title",
@@ -1952,6 +2408,11 @@ func TestCLI_HelpMatchesSubcommandFlags(t *testing.T) {
 			"--description",
 			"--blocked-by",
 			"--unblock",
+			"--epic",
+			"--remove-epic",
+		},
+		"claim": {
+			"--agent",
 		},
 		"close": {
 			"--resolution",
@@ -1992,6 +2453,8 @@ func TestCLI_HelpDocumentsAllCommands(t *testing.T) {
 		"update",
 		"delete",
 		"close",
+		"claim",
+		"unclaim",
 		"ready",
 		"export",
 		"import",

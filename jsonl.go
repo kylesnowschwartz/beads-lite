@@ -20,6 +20,7 @@ type IssueExport struct {
 	Status       Status             `json:"status"`
 	Priority     int                `json:"priority"`
 	Type         IssueType          `json:"issue_type"`
+	AssignedTo   string             `json:"assigned_to,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
 	ClosedAt     *time.Time         `json:"closed_at,omitempty"`
@@ -48,6 +49,7 @@ func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
 		Status:       issue.Status,
 		Priority:     issue.Priority,
 		Type:         issue.Type,
+		AssignedTo:   issue.AssignedTo,
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,
 		ClosedAt:     issue.ClosedAt,
@@ -167,6 +169,7 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 				Status:      export.Status,
 				Priority:    export.Priority,
 				Type:        export.Type,
+				AssignedTo:  export.AssignedTo,
 				CreatedAt:   export.CreatedAt,
 				UpdatedAt:   export.UpdatedAt,
 				ClosedAt:    export.ClosedAt,

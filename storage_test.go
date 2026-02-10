@@ -395,6 +395,185 @@ func TestStoreWithTransactionRollback(t *testing.T) {
 	}
 }
 
+func TestStoreClaimIssue(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Claimable Task")
+	store.CreateIssue(issue)
+
+	// First claim should succeed
+	claimed, err := store.ClaimIssue(issue.ID, "agent-1")
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if !claimed {
+		t.Error("first claim should succeed")
+	}
+
+	// Verify the issue is now assigned and in_progress
+	got, _ := store.GetIssue(issue.ID)
+	if got.AssignedTo != "agent-1" {
+		t.Errorf("AssignedTo = %q, want %q", got.AssignedTo, "agent-1")
+	}
+	if got.Status != StatusInProgress {
+		t.Errorf("Status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestStoreClaimIssueAlreadyClaimed(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Contested Task")
+	store.CreateIssue(issue)
+
+	// First agent claims
+	claimed1, err := store.ClaimIssue(issue.ID, "agent-1")
+	if err != nil {
+		t.Fatalf("first ClaimIssue() error = %v", err)
+	}
+	if !claimed1 {
+		t.Fatal("first claim should succeed")
+	}
+
+	// Second agent tries to claim the same task
+	claimed2, err := store.ClaimIssue(issue.ID, "agent-2")
+	if err != nil {
+		t.Fatalf("second ClaimIssue() error = %v", err)
+	}
+	if claimed2 {
+		t.Error("second claim should fail (already claimed)")
+	}
+
+	// Verify still assigned to agent-1
+	got, _ := store.GetIssue(issue.ID)
+	if got.AssignedTo != "agent-1" {
+		t.Errorf("AssignedTo = %q, want %q (should still be agent-1)", got.AssignedTo, "agent-1")
+	}
+}
+
+func TestStoreClaimIssueIdempotent(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Task")
+	store.CreateIssue(issue)
+
+	// Same agent claiming twice should fail on second attempt
+	// (the WHERE clause requires assigned_to IS NULL)
+	store.ClaimIssue(issue.ID, "agent-1")
+	claimed, _ := store.ClaimIssue(issue.ID, "agent-1")
+	if claimed {
+		t.Error("re-claim by same agent should return false (already assigned)")
+	}
+}
+
+func TestStoreUnclaimIssue(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Unclaim Me")
+	store.CreateIssue(issue)
+
+	// Claim then unclaim
+	store.ClaimIssue(issue.ID, "agent-1")
+	err := store.UnclaimIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("UnclaimIssue() error = %v", err)
+	}
+
+	// Verify reset
+	got, _ := store.GetIssue(issue.ID)
+	if got.AssignedTo != "" {
+		t.Errorf("AssignedTo = %q, want empty", got.AssignedTo)
+	}
+	if got.Status != StatusOpen {
+		t.Errorf("Status = %q, want %q", got.Status, StatusOpen)
+	}
+
+	// Another agent should now be able to claim
+	claimed, _ := store.ClaimIssue(issue.ID, "agent-2")
+	if !claimed {
+		t.Error("claim after unclaim should succeed")
+	}
+}
+
+func TestStoreCloseIssueClearsAssignment(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Assigned then closed")
+	store.CreateIssue(issue)
+
+	store.ClaimIssue(issue.ID, "agent-1")
+	store.CloseIssue(issue.ID, ResolutionDone)
+
+	got, _ := store.GetIssue(issue.ID)
+	if got.AssignedTo != "" {
+		t.Errorf("closing should clear AssignedTo, got %q", got.AssignedTo)
+	}
+}
+
+func TestStoreConcurrentClaim(t *testing.T) {
+	// Use a file-based database for real multi-goroutine contention.
+	// In-memory DBs don't exercise WAL + busy_timeout.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "concurrent.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	defer store.Close()
+
+	issue := NewIssue("Race Condition Task")
+	store.CreateIssue(issue)
+
+	const numAgents = 10
+	results := make(chan bool, numAgents)
+	errs := make(chan error, numAgents)
+
+	// Race: N goroutines all try to claim the same task
+	for i := 0; i < numAgents; i++ {
+		go func(agentNum int) {
+			// Each goroutine opens its own connection (like separate processes would)
+			s, err := NewStore(dbPath)
+			if err != nil {
+				errs <- err
+				results <- false
+				return
+			}
+			defer s.Close()
+
+			claimed, err := s.ClaimIssue(issue.ID, fmt.Sprintf("agent-%d", agentNum))
+			if err != nil {
+				errs <- err
+				results <- false
+				return
+			}
+			errs <- nil
+			results <- claimed
+		}(i)
+	}
+
+	// Collect results
+	winCount := 0
+	for i := 0; i < numAgents; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("agent error: %v", err)
+		}
+		if <-results {
+			winCount++
+		}
+	}
+
+	// Exactly one agent should have won the race
+	if winCount != 1 {
+		t.Errorf("expected exactly 1 winner, got %d", winCount)
+	}
+}
+
 // Helper to create a test store with in-memory database
 func newTestStore(t *testing.T) *Store {
 	t.Helper()

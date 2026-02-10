@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	flag "github.com/spf13/pflag"
@@ -50,6 +51,10 @@ func Run(args []string, w io.Writer) error {
 		return cmdDelete(cmdArgs, w)
 	case "close":
 		return cmdClose(cmdArgs, w)
+	case "claim":
+		return cmdClaim(cmdArgs, w)
+	case "unclaim":
+		return cmdUnclaim(cmdArgs, w)
 	case "ready":
 		return cmdReady(cmdArgs, w)
 	case "export":
@@ -81,6 +86,8 @@ Commands:
   update <id>           Update an issue (including blockers)
   delete <id>           Delete an issue permanently (requires --confirm)
   close <id>            Close an issue
+  claim <id>            Atomically claim an issue (for multi-agent use)
+  unclaim <id>          Release a claimed issue
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
@@ -93,6 +100,10 @@ List/Ready Flags:
   --tree                Show dependency tree
   --priority <int>      Filter by priority (0-4)
   --type <string>       Filter by type (task, bug, feature, epic)
+  --assigned-to <name>  Filter by assignee
+
+Ready-Only Flags:
+  --unclaimed           Only show tasks not claimed by any agent
 
 List-Only Flags:
   --status <string>     Filter by status (open, in_progress, closed)
@@ -100,12 +111,14 @@ List-Only Flags:
 
 Show Flags:
   --json                Output as JSON
+  --tree                Show subtree of downstream dependents
 
 Create Flags:
   --description <text>  Issue description
   --priority <int>      Priority (0-4), default 2
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
+  --epic <id>           Parent epic (groups under epic without blocking)
 
 Update Flags:
   --title <string>      New title
@@ -115,6 +128,11 @@ Update Flags:
   --description <text>  New description
   --blocked-by <id>     Add blocker (repeatable)
   --unblock <id>        Remove blocker (repeatable)
+  --epic <id>           Set parent epic (groups under epic without blocking)
+  --remove-epic <id>    Remove parent epic link
+
+Claim Flags:
+  --agent <name>        Agent name (required)
 
 Close Flags:
   --resolution <string> Resolution (done, wontfix, duplicate), default done
@@ -158,17 +176,23 @@ func cmdCreate(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(w)
 	description := fs.String("description", "", "Issue description")
-	priority := fs.Int("priority", 2, "Priority (0-4)")
+	priorityStr := fs.String("priority", "2", "Priority (0-4 or p0-p4)")
 	issueType := fs.String("type", "task", "Type (task, bug, feature, epic)")
 	blockedBy := fs.StringSlice("blocked-by", nil, "Issue ID that blocks this (repeatable)")
+	epicID := fs.String("epic", "", "Parent epic ID (groups under epic without blocking)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	priority, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>]")
+		return errors.New("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>] [--epic <id>]")
 	}
 
 	title := strings.Join(remaining, " ")
@@ -181,7 +205,7 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	issue := NewIssue(title)
 	issue.Description = *description
-	issue.Priority = *priority
+	issue.Priority = priority
 	issue.Type = IssueType(*issueType)
 
 	if err := store.CreateIssue(issue); err != nil {
@@ -190,6 +214,11 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	// Add dependencies if specified
 	if err := addBlockers(store, issue.ID, *blockedBy); err != nil {
+		return err
+	}
+
+	// Link to parent epic
+	if err := addParent(store, issue.ID, *epicID); err != nil {
 		return err
 	}
 
@@ -204,16 +233,22 @@ func cmdList(args []string, w io.Writer) error {
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
 	treeFlag := fs.Bool("tree", false, "Show dependency tree")
 	statusFilter := fs.String("status", "", "Filter by status (open, in_progress, closed)")
-	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
+	priorityStr := fs.String("priority", "", "Filter by priority (0-4 or p0-p4)")
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 	resolutionFilter := fs.String("resolution", "", "Filter by resolution (done, wontfix, duplicate)")
+	assignedToFilter := fs.String("assigned-to", "", "Filter by assignee")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	priorityFilter, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
 	// Validate filter values before opening store
-	if err := validateFilters(*statusFilter, *priorityFilter, *typeFilter, *resolutionFilter); err != nil {
+	if err := validateFilters(*statusFilter, priorityFilter, *typeFilter, *resolutionFilter); err != nil {
 		return err
 	}
 
@@ -229,19 +264,30 @@ func cmdList(args []string, w io.Writer) error {
 	}
 
 	// Apply filters
-	issues = filterIssues(issues, *statusFilter, *priorityFilter, *typeFilter, *resolutionFilter)
+	issues = filterIssues(issues, issueFilter{
+		status:     *statusFilter,
+		priority:   priorityFilter,
+		issueType:  *typeFilter,
+		resolution: *resolutionFilter,
+		assignedTo: *assignedToFilter,
+	})
 
-	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
+	return outputIssues(store, issues, nil, w, *jsonFlag, *treeFlag)
 }
 
 // formatIssueLine returns a formatted string for displaying an issue in list/ready output.
 func formatIssueLine(issue *Issue) string {
+	if issue.AssignedTo != "" {
+		return fmt.Sprintf("%s  %-11s  P%d  %s  [%s]  %s",
+			issue.ID, issue.Status, issue.Priority, issue.Type, issue.AssignedTo, issue.Title)
+	}
 	return fmt.Sprintf("%s  %-11s  P%d  %s  %s",
 		issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
 }
 
 // outputIssues handles the common output logic for list and ready commands.
-func outputIssues(store *Store, issues []*Issue, w io.Writer, jsonOut, treeOut bool) error {
+// treeIssues is the expanded set for tree building (pass nil to use issues for both).
+func outputIssues(store *Store, issues []*Issue, treeIssues []*Issue, w io.Writer, jsonOut, treeOut bool) error {
 	if len(issues) == 0 {
 		if jsonOut {
 			return nil
@@ -255,7 +301,7 @@ func outputIssues(store *Store, issues []*Issue, w io.Writer, jsonOut, treeOut b
 	}
 
 	if treeOut {
-		return outputIssuesTree(store, issues, w)
+		return outputIssuesTree(store, issues, treeIssues, w)
 	}
 
 	for _, issue := range issues {
@@ -281,29 +327,84 @@ func addBlockers(store *Store, issueID string, blockerIDs []string) error {
 	return nil
 }
 
-// filterIssues applies status, priority, type, and resolution filters to a slice of issues.
-func filterIssues(issues []*Issue, status string, priority int, issueType string, resolution string) []*Issue {
-	if status == "" && priority < 0 && issueType == "" && resolution == "" {
+// addParent links an issue under a parent epic with a non-blocking relationship.
+func addParent(store *Store, issueID, epicID string) error {
+	if epicID == "" {
+		return nil
+	}
+	if epicID == issueID {
+		return errors.New("issue cannot be its own parent")
+	}
+	parent, err := store.GetIssue(epicID)
+	if err != nil {
+		return fmt.Errorf("epic %s: %w", epicID, err)
+	}
+	if parent.Type != IssueTypeEpic {
+		return fmt.Errorf("epic %s: issue is type %q, not epic", epicID, parent.Type)
+	}
+	if err := store.AddDependency(issueID, epicID, DepParent); err != nil {
+		return fmt.Errorf("epic %s: %w", epicID, err)
+	}
+	return nil
+}
+
+// issueFilter holds all filter criteria for listing issues.
+type issueFilter struct {
+	status     string
+	priority   int // -1 means no filter
+	issueType  string
+	resolution string
+	assignedTo string
+	unclaimed  bool
+}
+
+// filterIssues applies filters to a slice of issues.
+func filterIssues(issues []*Issue, f issueFilter) []*Issue {
+	if f.status == "" && f.priority < 0 && f.issueType == "" && f.resolution == "" && f.assignedTo == "" && !f.unclaimed {
 		return issues // no filtering needed
 	}
 
 	var filtered []*Issue
 	for _, issue := range issues {
-		if status != "" && string(issue.Status) != status {
+		if f.status != "" && string(issue.Status) != f.status {
 			continue
 		}
-		if priority >= 0 && issue.Priority != priority {
+		if f.priority >= 0 && issue.Priority != f.priority {
 			continue
 		}
-		if issueType != "" && string(issue.Type) != issueType {
+		if f.issueType != "" && string(issue.Type) != f.issueType {
 			continue
 		}
-		if resolution != "" && string(issue.Resolution) != resolution {
+		if f.resolution != "" && string(issue.Resolution) != f.resolution {
+			continue
+		}
+		if f.assignedTo != "" && issue.AssignedTo != f.assignedTo {
+			continue
+		}
+		if f.unclaimed && issue.AssignedTo != "" {
 			continue
 		}
 		filtered = append(filtered, issue)
 	}
 	return filtered
+}
+
+// parsePriority accepts "0"-"4" or "p0"-"p4" (case-insensitive).
+// Returns -1 for empty string (no filter). Returns error for invalid values.
+func parsePriority(s string) (int, error) {
+	if s == "" {
+		return -1, nil
+	}
+	// Strip optional p/P prefix
+	s = strings.TrimPrefix(strings.ToLower(s), "p")
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid priority: %q (use 0-4 or p0-p4)", s)
+	}
+	if n < 0 || n > 4 {
+		return 0, fmt.Errorf("invalid priority: %d (valid: 0-4)", n)
+	}
+	return n, nil
 }
 
 // validateFilters checks that filter values are valid before applying them.
@@ -328,6 +429,7 @@ func cmdShow(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.SetOutput(w)
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
+	treeFlag := fs.Bool("tree", false, "Show subtree of dependents")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -335,7 +437,7 @@ func cmdShow(args []string, w io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl show <id> [--json]")
+		return errors.New("usage: bl show <id> [--json] [--tree]")
 	}
 	id := remaining[0]
 
@@ -358,11 +460,23 @@ func cmdShow(args []string, w io.Writer) error {
 		return outputSingleIssueJSON(issue, deps, w)
 	}
 
+	if *treeFlag {
+		// Show this issue as root with all its downstream dependents
+		allIssues, err := store.ListIssues()
+		if err != nil {
+			return fmt.Errorf("failed to list issues: %w", err)
+		}
+		return outputIssuesTree(store, []*Issue{issue}, allIssues, w)
+	}
+
 	fmt.Fprintf(w, "ID:       %s\n", issue.ID)
 	fmt.Fprintf(w, "Title:    %s\n", issue.Title)
 	fmt.Fprintf(w, "Status:   %s\n", issue.Status)
 	fmt.Fprintf(w, "Priority: P%d\n", issue.Priority)
 	fmt.Fprintf(w, "Type:     %s\n", issue.Type)
+	if issue.AssignedTo != "" {
+		fmt.Fprintf(w, "Assigned: %s\n", issue.AssignedTo)
+	}
 	if issue.Description != "" {
 		fmt.Fprintf(w, "Description: %s\n", issue.Description)
 	}
@@ -400,13 +514,20 @@ func cmdUpdate(args []string, w io.Writer) error {
 	fs.SetOutput(w)
 	title := fs.String("title", "", "New title")
 	status := fs.String("status", "", "New status")
-	priority := fs.Int("priority", -1, "New priority (0-4)")
+	priorityStr := fs.String("priority", "", "New priority (0-4 or p0-p4)")
 	issueType := fs.String("type", "", "New type")
 	description := fs.String("description", "", "New description")
 	addBlockersFlag := fs.StringSlice("blocked-by", nil, "Add blocker (repeatable)")
 	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
+	epicID := fs.String("epic", "", "Set parent epic (groups under epic without blocking)")
+	removeEpic := fs.String("remove-epic", "", "Remove parent epic link")
 
 	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+
+	priority, err := parsePriority(*priorityStr)
+	if err != nil {
 		return err
 	}
 
@@ -425,9 +546,6 @@ func cmdUpdate(args []string, w io.Writer) error {
 	if *status != "" && !Status(*status).Valid() {
 		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", *status)
 	}
-	if *priority >= 0 && *priority > 4 {
-		return fmt.Errorf("invalid priority: %d (valid: 0-4)", *priority)
-	}
 	if *issueType != "" && !IssueType(*issueType).Valid() {
 		return fmt.Errorf("invalid type: %q (valid: task, bug, feature, epic)", *issueType)
 	}
@@ -438,8 +556,8 @@ func cmdUpdate(args []string, w io.Writer) error {
 	if *status != "" {
 		issue.Status = Status(*status)
 	}
-	if *priority >= 0 {
-		issue.Priority = *priority
+	if priority >= 0 {
+		issue.Priority = priority
 	}
 	if *issueType != "" {
 		issue.Type = IssueType(*issueType)
@@ -461,6 +579,18 @@ func cmdUpdate(args []string, w io.Writer) error {
 	for _, blockerID := range *rmBlockers {
 		if err := store.RemoveDependency(id, blockerID, DepBlocks); err != nil {
 			return fmt.Errorf("blocker issue %s: %w", blockerID, err)
+		}
+	}
+
+	// Handle epic linking
+	if err := addParent(store, id, *epicID); err != nil {
+		return err
+	}
+
+	// Handle epic unlinking
+	if *removeEpic != "" {
+		if err := store.RemoveDependency(id, *removeEpic, DepParent); err != nil {
+			return fmt.Errorf("remove epic %s: %w", *removeEpic, err)
 		}
 	}
 
@@ -549,21 +679,98 @@ func cmdClose(args []string, w io.Writer) error {
 	return nil
 }
 
+// cmdClaim atomically claims an issue for an agent.
+func cmdClaim(args []string, w io.Writer) error {
+	fs := flag.NewFlagSet("claim", flag.ContinueOnError)
+	fs.SetOutput(w)
+	agent := fs.String("agent", "", "Agent name (required)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if fs.NArg() == 0 {
+		return errors.New("usage: bl claim <id> --agent <name>")
+	}
+	if *agent == "" {
+		return errors.New("--agent is required")
+	}
+
+	id := fs.Arg(0)
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	// Verify issue exists
+	issue, err := store.GetIssue(id)
+	if err != nil {
+		return fmt.Errorf("issue %s: %w", id, err)
+	}
+
+	claimed, err := store.ClaimIssue(id, *agent)
+	if err != nil {
+		return fmt.Errorf("failed to claim: %w", err)
+	}
+	if !claimed {
+		return fmt.Errorf("already claimed by %s", issue.AssignedTo)
+	}
+
+	fmt.Fprintf(w, "Claimed %s for %s: %s\n", id, *agent, issue.Title)
+	return nil
+}
+
+// cmdUnclaim releases a claimed issue.
+func cmdUnclaim(args []string, w io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: bl unclaim <id>")
+	}
+
+	id := args[0]
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	issue, err := store.GetIssue(id)
+	if err != nil {
+		return fmt.Errorf("issue %s: %w", id, err)
+	}
+
+	if err := store.UnclaimIssue(id); err != nil {
+		return fmt.Errorf("failed to unclaim: %w", err)
+	}
+
+	fmt.Fprintf(w, "Unclaimed %s: %s\n", id, issue.Title)
+	return nil
+}
+
 // cmdReady lists issues that are ready to work on (not blocked)
 func cmdReady(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
 	fs.SetOutput(w)
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
 	treeFlag := fs.Bool("tree", false, "Show dependency tree")
-	priorityFilter := fs.Int("priority", -1, "Filter by priority (0-4)")
+	priorityStr := fs.String("priority", "", "Filter by priority (0-4 or p0-p4)")
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
+	unclaimedFlag := fs.Bool("unclaimed", false, "Only show unclaimed tasks")
+	assignedToFilter := fs.String("assigned-to", "", "Filter by assignee")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	priorityFilter, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
 	// Validate filter values before opening store (no status/resolution for ready)
-	if err := validateFilters("", *priorityFilter, *typeFilter, ""); err != nil {
+	if err := validateFilters("", priorityFilter, *typeFilter, ""); err != nil {
 		return err
 	}
 
@@ -579,9 +786,30 @@ func cmdReady(args []string, w io.Writer) error {
 	}
 
 	// Apply filters (no status/resolution filter - ready work is already filtered to open/in_progress)
-	issues = filterIssues(issues, "", *priorityFilter, *typeFilter, "")
+	issues = filterIssues(issues, issueFilter{
+		priority:   priorityFilter,
+		issueType:  *typeFilter,
+		assignedTo: *assignedToFilter,
+		unclaimed:  *unclaimedFlag,
+	})
 
-	return outputIssues(store, issues, w, *jsonFlag, *treeFlag)
+	// For tree view, fetch all open issues so blocked children appear
+	// under their ready parents (otherwise tree would be flat)
+	var treeIssues []*Issue
+	if *treeFlag {
+		allIssues, err := store.ListIssues()
+		if err != nil {
+			return fmt.Errorf("failed to list issues for tree: %w", err)
+		}
+		// Only include non-closed issues in the tree
+		for _, issue := range allIssues {
+			if issue.Status != StatusClosed {
+				treeIssues = append(treeIssues, issue)
+			}
+		}
+	}
+
+	return outputIssues(store, issues, treeIssues, w, *jsonFlag, *treeFlag)
 }
 
 // cmdExport exports all issues to JSONL format
@@ -657,38 +885,49 @@ func sortByPriorityThenID(issues []*Issue) {
 	})
 }
 
-// outputIssuesTree renders issues as a dependency tree
-func outputIssuesTree(store *Store, issues []*Issue, w io.Writer) error {
+// outputIssuesTree renders issues as a dependency tree.
+// The issues slice determines which issues appear; treeIssues provides
+// the full set used for building parent-child relationships. When treeIssues
+// is nil, issues is used for both (the list --tree behavior).
+// When treeIssues is set (ready --tree), it allows blocked children to
+// appear under their ready parents.
+func outputIssuesTree(store *Store, issues []*Issue, treeIssues []*Issue, w io.Writer) error {
 	allDeps, err := store.GetAllDependencies()
 	if err != nil {
 		return fmt.Errorf("failed to get dependencies: %w", err)
 	}
 
-	// Build tree structure: roots are issues not blocked by any open issue
-	// Children are issues that ARE blocked by open issues
-	issueMap := make(map[string]*Issue)
-	for _, issue := range issues {
-		issueMap[issue.ID] = issue
+	if treeIssues == nil {
+		treeIssues = issues
 	}
 
-	// Identify children: issues that have an OPEN blocker in our list
-	// The blocker becomes the parent in the tree
+	// Build map of ALL issues available for tree building
+	treeMap := make(map[string]*Issue)
+	for _, issue := range treeIssues {
+		treeMap[issue.ID] = issue
+	}
+
+	// Also build a set of the requested issues (for root selection in list mode)
+	requestedSet := make(map[string]bool)
+	for _, issue := range issues {
+		requestedSet[issue.ID] = true
+	}
+
+	// Identify children: issues blocked by an open parent
 	children := make(map[string][]*Issue) // parent ID -> children
 	isChild := make(map[string]bool)
 
 	for _, dep := range allDeps {
 		for _, d := range dep {
-			if d.Type != DepBlocks {
+			if d.Type != DepBlocks && d.Type != DepParent {
 				continue
 			}
-			// d.IssueID is blocked by d.DependsOnID
-			// So d.DependsOnID is the parent, d.IssueID is the child
-			child, childOk := issueMap[d.IssueID]
-			parent, parentOk := issueMap[d.DependsOnID]
+			// d.IssueID depends on d.DependsOnID (parent in tree)
+			child, childOk := treeMap[d.IssueID]
+			parent, parentOk := treeMap[d.DependsOnID]
 			if !childOk || !parentOk {
 				continue
 			}
-			// Only count as child if parent is open (not closed)
 			if parent.Status != StatusClosed {
 				children[d.DependsOnID] = append(children[d.DependsOnID], child)
 				isChild[d.IssueID] = true
@@ -696,7 +935,7 @@ func outputIssuesTree(store *Store, issues []*Issue, w io.Writer) error {
 		}
 	}
 
-	// Roots are issues that aren't children of any open issue
+	// Roots: requested issues that aren't children of any open issue in the tree
 	var roots []*Issue
 	for _, issue := range issues {
 		if !isChild[issue.ID] {
@@ -704,36 +943,51 @@ func outputIssuesTree(store *Store, issues []*Issue, w io.Writer) error {
 		}
 	}
 
-	// Sort roots by priority then ID for deterministic output
 	sortByPriorityThenID(roots)
 
-	// Render tree
+	printed := make(map[string]bool)
 	for _, root := range roots {
 		fmt.Fprintln(w, formatIssueLine(root))
-		printTree(w, children, root.ID, "")
+		printed[root.ID] = true
+		printTree(w, children, root.ID, "", printed)
 	}
 
 	return nil
 }
 
-// printTree recursively prints children with tree-drawing characters
-func printTree(w io.Writer, children map[string][]*Issue, parentID string, prefix string) {
+// printTree recursively prints children with tree-drawing characters.
+// The printed set prevents duplicate subtrees when an issue has multiple
+// parent edges (e.g., both a parent epic link and a blocks dependency).
+func printTree(w io.Writer, children map[string][]*Issue, parentID string, prefix string, printed map[string]bool) {
 	kids := children[parentID]
 	sortByPriorityThenID(kids)
 
 	for i, child := range kids {
-		isLast := i == len(kids)-1
+		if printed[child.ID] {
+			continue
+		}
+
+		// Check if any later sibling is still unprinted
+		isLast := true
+		for _, later := range kids[i+1:] {
+			if !printed[later.ID] {
+				isLast = false
+				break
+			}
+		}
+
 		connector := "├── "
 		if isLast {
 			connector = "└── "
 		}
 		fmt.Fprintf(w, "%s%s%s\n", prefix, connector, formatIssueLine(child))
+		printed[child.ID] = true
 
 		extension := "│   "
 		if isLast {
 			extension = "    "
 		}
-		printTree(w, children, child.ID, prefix+extension)
+		printTree(w, children, child.ID, prefix+extension, printed)
 	}
 }
 
@@ -746,10 +1000,9 @@ This project uses beads-lite for task tracking. You MUST use it to track work.
 ## Required Workflow
 
 1. Run ` + "`bl ready`" + ` at session start to see available work
-2. When you start working on a task: ` + "`bl update <id> --status in_progress`" + `
-3. When you discover new work, create a task: ` + "`bl create \"description\"`" + `
-4. When tasks depend on each other: ` + "`bl update <id> --blocked-by <blocker>`" + `
-5. When you complete work: ` + "`bl close <id>`" + `
+2. When you discover new work, create a task: ` + "`bl create \"description\"`" + `
+3. When tasks depend on each other: ` + "`bl update <id> --blocked-by <blocker>`" + `
+4. When you complete work: ` + "`bl close <id>`" + `
 
 ## Commands
 
@@ -758,9 +1011,7 @@ bl ready              # what can I work on now?
 bl ready --json       # machine-readable output
 bl list               # all tasks
 bl list --tree        # dependency visualization
-bl list --status in_progress  # see what's being worked on
 bl create "title"     # new task
-bl update <id> --status in_progress  # claim work
 bl close <id>         # complete task (resolution: done)
 bl close <id> --resolution wontfix   # close as won't fix
 bl close <id> --resolution duplicate # close as duplicate
@@ -778,34 +1029,54 @@ When closing tasks, specify WHY with --resolution:
 
 Use ` + "`bl list --status closed --resolution wontfix`" + ` to review rejected ideas.
 
+## Multi-Agent Claiming
+
+When multiple agents share a database, use atomic claiming to avoid duplicate work:
+
+` + "```" + `
+bl claim <id> --agent <name>   # atomically claim (fails if already claimed)
+bl unclaim <id>                # release claim
+bl ready --unclaimed           # only show tasks no one has claimed
+bl ready --assigned-to <name>  # show tasks assigned to specific agent
+bl list --assigned-to <name>   # list tasks assigned to specific agent
+` + "```" + `
+
 ## Epic Workflow
 
-Epics group related tasks. Use blockers for actual work dependencies, not organization.
+Epics group related tasks. Use ` + "`--epic`" + ` to link tasks under epics (non-blocking).
+Use ` + "`--blocked-by`" + ` only for real work dependencies.
 
 ` + "```" + `
 # Create epic to track a feature
 bl create "User authentication" --type epic
 
-# Create tasks for the epic (work on them immediately)
-bl create "Add login endpoint"
-bl create "Add session storage"
-bl create "Add logout endpoint"
+# Create tasks linked to the epic
+bl create "Add login endpoint" --epic <epic-id>
+bl create "Add session storage" --epic <epic-id>
+bl create "Add logout endpoint" --epic <epic-id>
 
-# If tasks have real dependencies, add blockers
+# Link existing tasks to an epic
+bl update <task-id> --epic <epic-id>
+
+# If tasks have real work dependencies, add blockers
 bl update <logout-id> --blocked-by <login-id>
 
-# View all work
+# View tree (epics show children)
 bl list --tree
+bl ready --tree
 
 # Close tasks as completed, close epic when feature is done
 bl close <epic-id>
 ` + "```" + `
 
+IMPORTANT: Always link tasks to their parent epic with ` + "`--epic <id>`" + `.
+Epics without linked children are invisible in tree views.
+
 ## Rules
 
 - Always check ` + "`bl ready`" + ` before starting work
-- Mark tasks ` + "`in_progress`" + ` when you start working on them
 - Create tasks for any new work you discover
+- Link tasks to their parent epic with ` + "`--epic <id>`" + `
 - Close tasks when complete - this unblocks dependent tasks
 - Use ` + "`--json`" + ` flag when you need to parse output programmatically
 `

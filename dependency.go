@@ -12,11 +12,13 @@ type DepType string
 const (
 	// DepBlocks indicates the depended-on issue must close before this issue is ready.
 	DepBlocks DepType = "blocks"
+	// DepParent groups an issue under a parent (typically an epic) without blocking it.
+	DepParent DepType = "parent"
 )
 
 // Valid returns true if the dependency type is a known valid type.
 func (d DepType) Valid() bool {
-	return d == DepBlocks
+	return d == DepBlocks || d == DepParent
 }
 
 // Dependency represents an edge in the issue dependency graph.

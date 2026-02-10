@@ -26,10 +26,19 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("open database %s: %w", dbPath, err)
 	}
 
+	// WAL mode: concurrent readers + single writer (no reader blocking).
+	// busy_timeout: retry writes for 5s instead of immediate SQLITE_BUSY.
+	db.Exec("PRAGMA journal_mode=wal")
+	db.Exec("PRAGMA busy_timeout=5000")
+
 	store := &Store{db: db}
 	if err := store.initSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
+	}
+	if err := store.migrateSchema(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
 	return store, nil
@@ -68,6 +77,7 @@ func (s *Store) initSchema() error {
 		status TEXT NOT NULL DEFAULT 'open',
 		priority INTEGER NOT NULL DEFAULT 2,
 		issue_type TEXT NOT NULL DEFAULT 'task',
+		assigned_to TEXT,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		closed_at DATETIME,
@@ -93,6 +103,13 @@ func (s *Store) initSchema() error {
 	return nil
 }
 
+// migrateSchema adds columns that may not exist in older databases.
+// Each ALTER TABLE is idempotent: "duplicate column name" errors are ignored.
+func (s *Store) migrateSchema() error {
+	s.db.Exec("ALTER TABLE issues ADD COLUMN assigned_to TEXT")
+	return nil
+}
+
 // CreateIssue inserts a new issue into the database.
 func (s *Store) CreateIssue(issue *Issue) error {
 	if err := issue.Validate(); err != nil {
@@ -100,10 +117,10 @@ func (s *Store) CreateIssue(issue *Issue) error {
 	}
 
 	if _, err := s.db.Exec(`
-		INSERT INTO issues (id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, resolution)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO issues (id, title, description, status, priority, issue_type, assigned_to, created_at, updated_at, closed_at, resolution)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.Type,
-		issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution); err != nil {
+		nilIfEmpty(issue.AssignedTo), issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution); err != nil {
 		return fmt.Errorf("insert issue: %w", err)
 	}
 	return nil
@@ -113,10 +130,11 @@ func (s *Store) CreateIssue(issue *Issue) error {
 func (s *Store) GetIssue(id string) (*Issue, error) {
 	issue := &Issue{}
 	err := s.db.QueryRow(`
-		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
+		SELECT id, title, description, status, priority, issue_type,
+		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, '')
 		FROM issues WHERE id = ?`, id).Scan(
 		&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority,
-		&issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution)
+		&issue.Type, &issue.AssignedTo, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution)
 
 	if err == sql.ErrNoRows {
 		return nil, ErrIssueNotFound
@@ -133,10 +151,10 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 	issue.UpdatedAt = time.Now()
 	if _, err := s.db.Exec(`
 		UPDATE issues SET title = ?, description = ?, status = ?, priority = ?,
-		issue_type = ?, updated_at = ?, closed_at = ?, resolution = ?
+		issue_type = ?, assigned_to = ?, updated_at = ?, closed_at = ?, resolution = ?
 		WHERE id = ?`,
 		issue.Title, issue.Description, issue.Status, issue.Priority,
-		issue.Type, issue.UpdatedAt, issue.ClosedAt, issue.Resolution, issue.ID); err != nil {
+		issue.Type, nilIfEmpty(issue.AssignedTo), issue.UpdatedAt, issue.ClosedAt, issue.Resolution, issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	return nil
@@ -146,7 +164,7 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 func (s *Store) CloseIssue(id string, resolution Resolution) error {
 	now := time.Now()
 	if _, err := s.db.Exec(`
-		UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, resolution = ?
+		UPDATE issues SET status = ?, assigned_to = NULL, updated_at = ?, closed_at = ?, resolution = ?
 		WHERE id = ?`, StatusClosed, now, now, resolution, id); err != nil {
 		return fmt.Errorf("close issue: %w", err)
 	}
@@ -156,7 +174,8 @@ func (s *Store) CloseIssue(id string, resolution Resolution) error {
 // ListIssues returns all issues.
 func (s *Store) ListIssues() ([]*Issue, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, description, status, priority, issue_type, created_at, updated_at, closed_at, COALESCE(resolution, '')
+		SELECT id, title, description, status, priority, issue_type,
+		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, '')
 		FROM issues ORDER BY priority ASC, created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -219,7 +238,7 @@ func (s *Store) GetDependencies(issueID string) ([]*Dependency, error) {
 func (s *Store) GetReadyWork() ([]*Issue, error) {
 	query := `
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
-		       i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, '')
+		       COALESCE(i.assigned_to, ''), i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, '')
 		FROM issues i
 		WHERE i.status IN ('open', 'in_progress')
 		AND i.id NOT IN (
@@ -246,7 +265,8 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 	for rows.Next() {
 		issue := &Issue{}
 		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status,
-			&issue.Priority, &issue.Type, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution); err != nil {
+			&issue.Priority, &issue.Type, &issue.AssignedTo,
+			&issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution); err != nil {
 			return nil, err
 		}
 		issues = append(issues, issue)
@@ -274,6 +294,43 @@ func (s *Store) GetAllDependencies() (map[string][]*Dependency, error) {
 		result[dep.IssueID] = append(result[dep.IssueID], dep)
 	}
 	return result, rows.Err()
+}
+
+// ClaimIssue atomically assigns an issue to an agent. Returns true if the claim
+// succeeded, false if already claimed by someone else. Uses BEGIN IMMEDIATE to
+// serialize concurrent claim attempts -- exactly one agent wins.
+func (s *Store) ClaimIssue(id, agent string) (bool, error) {
+	var claimed bool
+	err := s.WithTransaction(func() error {
+		result, err := s.db.Exec(`
+			UPDATE issues SET assigned_to = ?, status = 'in_progress', updated_at = ?
+			WHERE id = ? AND (assigned_to IS NULL OR assigned_to = '')`,
+			agent, time.Now(), id)
+		if err != nil {
+			return err
+		}
+		rows, _ := result.RowsAffected()
+		claimed = rows == 1
+		return nil
+	})
+	return claimed, err
+}
+
+// UnclaimIssue removes the assignment from an issue and resets it to open.
+func (s *Store) UnclaimIssue(id string) error {
+	_, err := s.db.Exec(`
+		UPDATE issues SET assigned_to = NULL, status = 'open', updated_at = ?
+		WHERE id = ?`, time.Now(), id)
+	return err
+}
+
+// nilIfEmpty returns nil for empty strings, allowing SQLite to store NULL
+// instead of empty string. This keeps assigned_to semantically clean.
+func nilIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // DeleteIssue removes an issue and all its dependencies from the database.
