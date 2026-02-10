@@ -1017,6 +1017,7 @@ bl close <id> --resolution wontfix   # close as won't fix
 bl close <id> --resolution duplicate # close as duplicate
 bl update <a> --blocked-by <b>       # a blocked by b
 bl show <id>          # task details
+bl show <id> --tree   # show issue with dependency subtree
 bl list --status closed --resolution wontfix  # filter by resolution
 ` + "```" + `
 
