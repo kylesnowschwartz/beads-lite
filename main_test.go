@@ -174,14 +174,14 @@ func TestCLI_Update_Status(t *testing.T) {
 	createOut, _ := runCLI([]string{"create", "Task"})
 	id := extractID(createOut)
 
-	_, err := runCLI([]string{"update", id, "--status", "in_progress"})
+	_, err := runCLI([]string{"update", id, "--status", "doing"})
 	if err != nil {
 		t.Fatalf("update status failed: %v", err)
 	}
 
 	showOut, _ := runCLI([]string{"show", id})
-	if !strings.Contains(showOut, "in_progress") {
-		t.Errorf("expected in_progress status, got: %s", showOut)
+	if !strings.Contains(showOut, "doing") {
+		t.Errorf("expected doing status, got: %s", showOut)
 	}
 }
 
@@ -198,8 +198,8 @@ func TestCLI_Close(t *testing.T) {
 	}
 
 	showOut, _ := runCLI([]string{"show", id})
-	if !strings.Contains(showOut, "closed") {
-		t.Errorf("expected closed status, got: %s", showOut)
+	if !strings.Contains(showOut, "done") {
+		t.Errorf("expected done status, got: %s", showOut)
 	}
 }
 
@@ -441,7 +441,7 @@ func TestCLI_Import(t *testing.T) {
 	runCLI([]string{"init"})
 
 	// Create JSONL file
-	content := `{"id":"bl-imp1","title":"Imported Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+	content := `{"id":"bl-imp1","title":"Imported Task","status":"todo","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
 	os.WriteFile("import.jsonl", []byte(content), 0644)
 
 	out, err := runCLI([]string{"import", "import.jsonl"})
@@ -583,7 +583,7 @@ func TestCLI_List_JSON(t *testing.T) {
 	if !strings.Contains(out, `"id":"bl-`) {
 		t.Errorf("expected JSON with id, got: %s", out)
 	}
-	if !strings.Contains(out, `"status":"open"`) {
+	if !strings.Contains(out, `"status":"todo"`) {
 		t.Errorf("expected JSON with status, got: %s", out)
 	}
 }
@@ -1019,32 +1019,32 @@ func TestCLI_List_FilterByStatus(t *testing.T) {
 	setupTestDir(t)
 
 	runCLI([]string{"init"})
-	outOpen, _ := runCLI([]string{"create", "Open Task"})
-	outClosed, _ := runCLI([]string{"create", "Closed Task"})
-	idClosed := extractID(outClosed)
-	runCLI([]string{"close", idClosed})
+	outBacklog, _ := runCLI([]string{"create", "Backlog Task"})
+	outDone, _ := runCLI([]string{"create", "Done Task"})
+	idDone := extractID(outDone)
+	runCLI([]string{"close", idDone})
 
-	// Filter by open status
-	out, err := runCLI([]string{"list", "--status", "open"})
+	// Filter by todo status (bl create defaults to todo)
+	out, err := runCLI([]string{"list", "--status", "todo"})
 	if err != nil {
-		t.Fatalf("list --status open failed: %v", err)
+		t.Fatalf("list --status todo failed: %v", err)
 	}
-	if !strings.Contains(out, "Open Task") {
-		t.Errorf("expected 'Open Task' in output, got: %s", out)
+	if !strings.Contains(out, "Backlog Task") {
+		t.Errorf("expected 'Backlog Task' in output, got: %s", out)
 	}
-	if strings.Contains(out, "Closed Task") {
-		t.Errorf("should NOT contain 'Closed Task', got: %s", out)
+	if strings.Contains(out, "Done Task") {
+		t.Errorf("should NOT contain 'Done Task', got: %s", out)
 	}
 
-	// Filter by closed status
-	outClosed2, _ := runCLI([]string{"list", "--status", "closed"})
-	if strings.Contains(outClosed2, "Open Task") {
-		t.Errorf("should NOT contain 'Open Task' when filtering closed, got: %s", outClosed2)
+	// Filter by done status
+	outDone2, _ := runCLI([]string{"list", "--status", "done"})
+	if strings.Contains(outDone2, "Backlog Task") {
+		t.Errorf("should NOT contain 'Backlog Task' when filtering done, got: %s", outDone2)
 	}
-	if !strings.Contains(outClosed2, "Closed Task") {
-		t.Errorf("expected 'Closed Task' in closed filter, got: %s", outClosed2)
+	if !strings.Contains(outDone2, "Done Task") {
+		t.Errorf("expected 'Done Task' in done filter, got: %s", outDone2)
 	}
-	_ = outOpen // silence unused
+	_ = outBacklog // silence unused
 }
 
 func TestCLI_List_FilterByPriority(t *testing.T) {
@@ -1112,8 +1112,8 @@ func TestCLI_List_CombinedFilters(t *testing.T) {
 	runCLI([]string{"update", id4, "--priority", "1", "--type", "bug"})
 	runCLI([]string{"close", id4})
 
-	// Filter: open + P1 + bug -> only "Open P1 Bug"
-	out, err := runCLI([]string{"list", "--status", "open", "--priority", "1", "--type", "bug"})
+	// Filter: todo + P1 + bug -> only "Open P1 Bug"
+	out, err := runCLI([]string{"list", "--status", "todo", "--priority", "1", "--type", "bug"})
 	if err != nil {
 		t.Fatalf("combined filter failed: %v", err)
 	}
@@ -1762,9 +1762,9 @@ func TestCLI_Import_MalformedJSON(t *testing.T) {
 	runCLI([]string{"init"})
 
 	// Create file with malformed JSON
-	content := `{"id":"bl-good","title":"Good Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}
+	content := `{"id":"bl-good","title":"Good Task","status":"todo","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}
 {not valid json at all
-{"id":"bl-also","title":"Also Good","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+{"id":"bl-also","title":"Also Good","status":"todo","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
 	os.WriteFile("malformed.jsonl", []byte(content), 0644)
 
 	_, err := runCLI([]string{"import", "malformed.jsonl"})
@@ -1781,7 +1781,7 @@ func TestCLI_Import_NonExistentDependency(t *testing.T) {
 	runCLI([]string{"init"})
 
 	// Create file with dependency referencing non-existent issue
-	content := `{"id":"bl-orphan","title":"Orphan Task","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[{"depends_on":"bl-nonexistent","type":"blocks"}]}`
+	content := `{"id":"bl-orphan","title":"Orphan Task","status":"todo","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[{"depends_on":"bl-nonexistent","type":"blocks"}]}`
 	os.WriteFile("orphan.jsonl", []byte(content), 0644)
 
 	// Import should succeed (FK not enforced at runtime), but we document this behavior
@@ -1822,8 +1822,8 @@ func TestCLI_Close_AlreadyClosed(t *testing.T) {
 
 	// Verify still closed
 	showOut, _ := runCLI([]string{"show", id})
-	if !strings.Contains(showOut, "closed") {
-		t.Errorf("issue should still be closed: %s", showOut)
+	if !strings.Contains(showOut, "done") {
+		t.Errorf("issue should still be done: %s", showOut)
 	}
 }
 
@@ -1895,7 +1895,7 @@ func TestCLI_List_FilterResolution(t *testing.T) {
 	runCLI([]string{"close", id3, "--resolution", "wontfix"})
 
 	// Filter by wontfix
-	out, _ := runCLI([]string{"list", "--status", "closed", "--resolution", "wontfix"})
+	out, _ := runCLI([]string{"list", "--status", "done", "--resolution", "wontfix"})
 	if !strings.Contains(out, id2) || !strings.Contains(out, id3) {
 		t.Errorf("expected wontfix issues in output, got: %s", out)
 	}
@@ -1904,7 +1904,7 @@ func TestCLI_List_FilterResolution(t *testing.T) {
 	}
 
 	// Filter by done
-	out2, _ := runCLI([]string{"list", "--status", "closed", "--resolution", "done"})
+	out2, _ := runCLI([]string{"list", "--status", "done", "--resolution", "done"})
 	if !strings.Contains(out2, id1) {
 		t.Errorf("expected done issue in output, got: %s", out2)
 	}
@@ -2148,8 +2148,8 @@ func TestCLI_Claim(t *testing.T) {
 	if !strings.Contains(showOut, "agent-1") {
 		t.Errorf("expected agent-1 in show output, got: %s", showOut)
 	}
-	if !strings.Contains(showOut, "in_progress") {
-		t.Errorf("expected in_progress status, got: %s", showOut)
+	if !strings.Contains(showOut, "doing") {
+		t.Errorf("expected doing status, got: %s", showOut)
 	}
 }
 
@@ -2226,8 +2226,8 @@ func TestCLI_Unclaim(t *testing.T) {
 	if strings.Contains(showOut, "agent-1") {
 		t.Errorf("assignment should be cleared: %s", showOut)
 	}
-	if !strings.Contains(showOut, "open") {
-		t.Errorf("status should be reset to open: %s", showOut)
+	if !strings.Contains(showOut, "todo") {
+		t.Errorf("status should be reset to todo: %s", showOut)
 	}
 }
 
@@ -2473,5 +2473,35 @@ func TestCLI_HelpDocumentsAllCommands(t *testing.T) {
 
 	if len(missing) > 0 {
 		t.Errorf("main help is missing documentation for these commands: %v", missing)
+	}
+}
+
+func TestCLI_BLRoot_Override(t *testing.T) {
+	// Init in directory A
+	dirA := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dirA)
+	runCLI([]string{"init"})
+	runCLI([]string{"create", "BL_ROOT Test Task"})
+
+	// Move to directory B
+	dirB := t.TempDir()
+	os.Chdir(dirB)
+	t.Cleanup(func() { os.Chdir(oldDir) })
+
+	// Without BL_ROOT, should fail
+	_, err := runCLI([]string{"list"})
+	if err == nil {
+		t.Error("expected error without BL_ROOT in different directory")
+	}
+
+	// With BL_ROOT pointing to A, should work
+	t.Setenv("BL_ROOT", dirA)
+	out, err := runCLI([]string{"list"})
+	if err != nil {
+		t.Fatalf("list with BL_ROOT failed: %v", err)
+	}
+	if !strings.Contains(out, "BL_ROOT Test Task") {
+		t.Errorf("expected task in output, got: %s", out)
 	}
 }

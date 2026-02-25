@@ -106,7 +106,7 @@ Ready-Only Flags:
   --unclaimed           Only show tasks not claimed by any agent
 
 List-Only Flags:
-  --status <string>     Filter by status (open, in_progress, closed)
+  --status <string>     Filter by status (backlog, todo, doing, review, done)
   --resolution <string> Filter by resolution (done, wontfix, duplicate)
 
 Show Flags:
@@ -122,7 +122,7 @@ Create Flags:
 
 Update Flags:
   --title <string>      New title
-  --status <string>     New status (open, in_progress, closed)
+  --status <string>     New status (backlog, todo, doing, review, done)
   --priority <int>      New priority (0-4)
   --type <string>       New type (task, bug, feature, epic)
   --description <text>  New description
@@ -142,6 +142,9 @@ Delete Flags:
 }
 
 func getDBPath() string {
+	if root := os.Getenv("BL_ROOT"); root != "" {
+		return filepath.Join(root, beadsDir, dbName)
+	}
 	return filepath.Join(beadsDir, dbName)
 }
 
@@ -155,8 +158,12 @@ func openStore() (*Store, error) {
 
 // cmdInit creates the .beads-lite directory and initializes the database
 func cmdInit(w io.Writer) error {
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create %s: %w", beadsDir, err)
+	dir := beadsDir
+	if root := os.Getenv("BL_ROOT"); root != "" {
+		dir = filepath.Join(root, beadsDir)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create %s: %w", dir, err)
 	}
 
 	store, err := NewStore(getDBPath())
@@ -204,6 +211,7 @@ func cmdCreate(args []string, w io.Writer) error {
 	defer store.Close()
 
 	issue := NewIssue(title)
+	issue.Status = StatusTodo // CLI-created tasks are actionable by default
 	issue.Description = *description
 	issue.Priority = priority
 	issue.Type = IssueType(*issueType)
@@ -232,7 +240,7 @@ func cmdList(args []string, w io.Writer) error {
 	fs.SetOutput(w)
 	jsonFlag := fs.Bool("json", false, "Output as JSONL")
 	treeFlag := fs.Bool("tree", false, "Show dependency tree")
-	statusFilter := fs.String("status", "", "Filter by status (open, in_progress, closed)")
+	statusFilter := fs.String("status", "", "Filter by status (backlog, todo, doing, review, done)")
 	priorityStr := fs.String("priority", "", "Filter by priority (0-4 or p0-p4)")
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 	resolutionFilter := fs.String("resolution", "", "Filter by resolution (done, wontfix, duplicate)")
@@ -278,10 +286,10 @@ func cmdList(args []string, w io.Writer) error {
 // formatIssueLine returns a formatted string for displaying an issue in list/ready output.
 func formatIssueLine(issue *Issue) string {
 	if issue.AssignedTo != "" {
-		return fmt.Sprintf("%s  %-11s  P%d  %s  [%s]  %s",
+		return fmt.Sprintf("%s  %-7s  P%d  %s  [%s]  %s",
 			issue.ID, issue.Status, issue.Priority, issue.Type, issue.AssignedTo, issue.Title)
 	}
-	return fmt.Sprintf("%s  %-11s  P%d  %s  %s",
+	return fmt.Sprintf("%s  %-7s  P%d  %s  %s",
 		issue.ID, issue.Status, issue.Priority, issue.Type, issue.Title)
 }
 
@@ -410,7 +418,7 @@ func parsePriority(s string) (int, error) {
 // validateFilters checks that filter values are valid before applying them.
 func validateFilters(status string, priority int, issueType string, resolution string) error {
 	if status != "" && !Status(status).Valid() {
-		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", status)
+		return fmt.Errorf("invalid status: %q (valid: backlog, todo, doing, review, done)", status)
 	}
 	if priority >= 0 && priority > 4 {
 		return fmt.Errorf("invalid priority: %d (valid: 0-4)", priority)
@@ -504,7 +512,7 @@ func cmdShow(args []string, w io.Writer) error {
 // cmdUpdate modifies an existing issue
 func cmdUpdate(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bl update <id> [--title <text>] [--status <open|in_progress|closed>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
+		return errors.New("usage: bl update <id> [--title <text>] [--status <backlog|todo|doing|review|done>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
 	}
 
 	id := args[0]
@@ -544,7 +552,7 @@ func cmdUpdate(args []string, w io.Writer) error {
 
 	// Validate inputs before applying changes
 	if *status != "" && !Status(*status).Valid() {
-		return fmt.Errorf("invalid status: %q (valid: open, in_progress, closed)", *status)
+		return fmt.Errorf("invalid status: %q (valid: backlog, todo, doing, review, done)", *status)
 	}
 	if *issueType != "" && !IssueType(*issueType).Valid() {
 		return fmt.Errorf("invalid type: %q (valid: task, bug, feature, epic)", *issueType)
@@ -803,7 +811,7 @@ func cmdReady(args []string, w io.Writer) error {
 		}
 		// Only include non-closed issues in the tree
 		for _, issue := range allIssues {
-			if issue.Status != StatusClosed {
+			if issue.Status != StatusDone {
 				treeIssues = append(treeIssues, issue)
 			}
 		}
@@ -928,7 +936,7 @@ func outputIssuesTree(store *Store, issues []*Issue, treeIssues []*Issue, w io.W
 			if !childOk || !parentOk {
 				continue
 			}
-			if parent.Status != StatusClosed {
+			if parent.Status != StatusDone {
 				children[d.DependsOnID] = append(children[d.DependsOnID], child)
 				isChild[d.IssueID] = true
 			}
@@ -1018,7 +1026,7 @@ bl close <id> --resolution duplicate # close as duplicate
 bl update <a> --blocked-by <b>       # a blocked by b
 bl show <id>          # task details
 bl show <id> --tree   # show issue with dependency subtree
-bl list --status closed --resolution wontfix  # filter by resolution
+bl list --status done --resolution wontfix  # filter by resolution
 ` + "```" + `
 
 ## Closing Tasks
@@ -1028,7 +1036,7 @@ When closing tasks, specify WHY with --resolution:
 - ` + "`wontfix`" + `: Intentionally rejected (document reasoning in description)
 - ` + "`duplicate`" + `: Duplicate of another issue
 
-Use ` + "`bl list --status closed --resolution wontfix`" + ` to review rejected ideas.
+Use ` + "`bl list --status done --resolution wontfix`" + ` to review rejected ideas.
 
 ## Multi-Agent Claiming
 
