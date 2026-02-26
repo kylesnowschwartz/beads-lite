@@ -12,10 +12,16 @@ import (
 
 // setupTestDir creates a temp directory and changes to it for the duration of the test.
 // Uses t.Cleanup() to automatically restore the working directory when the test completes.
+// BL_ROOT is unset so that runCLI resolves the database from the temp dir, not a parent
+// repo's database — without this, inherited BL_ROOT takes priority over os.Chdir.
 func setupTestDir(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	oldDir, _ := os.Getwd()
+	if old, ok := os.LookupEnv("BL_ROOT"); ok {
+		os.Unsetenv("BL_ROOT")
+		t.Cleanup(func() { os.Setenv("BL_ROOT", old) })
+	}
 	os.Chdir(dir)
 	t.Cleanup(func() { os.Chdir(oldDir) })
 }
@@ -2477,6 +2483,11 @@ func TestCLI_HelpDocumentsAllCommands(t *testing.T) {
 }
 
 func TestCLI_BLRoot_Override(t *testing.T) {
+	// Clear any inherited BL_ROOT so the "without BL_ROOT" assertion below is
+	// deterministic regardless of what the parent process set.
+	t.Setenv("BL_ROOT", "")
+	os.Unsetenv("BL_ROOT")
+
 	// Init in directory A
 	dirA := t.TempDir()
 	oldDir, _ := os.Getwd()
