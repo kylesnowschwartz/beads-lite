@@ -74,7 +74,7 @@ func (s *Store) initSchema() error {
 		id TEXT PRIMARY KEY,
 		title TEXT NOT NULL,
 		description TEXT,
-		status TEXT NOT NULL DEFAULT 'open',
+		status TEXT NOT NULL DEFAULT 'backlog',
 		priority INTEGER NOT NULL DEFAULT 2,
 		issue_type TEXT NOT NULL DEFAULT 'task',
 		assigned_to TEXT,
@@ -105,8 +105,16 @@ func (s *Store) initSchema() error {
 
 // migrateSchema adds columns that may not exist in older databases.
 // Each ALTER TABLE is idempotent: "duplicate column name" errors are ignored.
+// Status migration: open→todo, in_progress→doing, closed→done.
 func (s *Store) migrateSchema() error {
 	s.db.Exec("ALTER TABLE issues ADD COLUMN assigned_to TEXT")
+
+	// Migrate legacy 3-status values to 5-column kanban statuses.
+	// Each UPDATE is idempotent: if no rows match, nothing happens.
+	s.db.Exec("UPDATE issues SET status = 'todo' WHERE status = 'open'")
+	s.db.Exec("UPDATE issues SET status = 'doing' WHERE status = 'in_progress'")
+	s.db.Exec("UPDATE issues SET status = 'done' WHERE status = 'closed'")
+
 	return nil
 }
 
@@ -165,7 +173,7 @@ func (s *Store) CloseIssue(id string, resolution Resolution) error {
 	now := time.Now()
 	if _, err := s.db.Exec(`
 		UPDATE issues SET status = ?, assigned_to = NULL, updated_at = ?, closed_at = ?, resolution = ?
-		WHERE id = ?`, StatusClosed, now, now, resolution, id); err != nil {
+		WHERE id = ?`, StatusDone, now, now, resolution, id); err != nil {
 		return fmt.Errorf("close issue: %w", err)
 	}
 	return nil
@@ -240,13 +248,13 @@ func (s *Store) GetReadyWork() ([]*Issue, error) {
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
 		       COALESCE(i.assigned_to, ''), i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, '')
 		FROM issues i
-		WHERE i.status IN ('open', 'in_progress')
+		WHERE i.status IN ('todo', 'doing', 'review')
 		AND i.id NOT IN (
 			SELECT DISTINCT d.issue_id
 			FROM dependencies d
 			JOIN issues blocker ON d.depends_on_id = blocker.id
 			WHERE d.type = 'blocks'
-			  AND blocker.status != 'closed'
+			  AND blocker.status != 'done'
 		)
 		ORDER BY i.priority ASC, i.created_at ASC
 	`
@@ -303,7 +311,7 @@ func (s *Store) ClaimIssue(id, agent string) (bool, error) {
 	var claimed bool
 	err := s.WithTransaction(func() error {
 		result, err := s.db.Exec(`
-			UPDATE issues SET assigned_to = ?, status = 'in_progress', updated_at = ?
+			UPDATE issues SET assigned_to = ?, status = 'doing', updated_at = ?
 			WHERE id = ? AND (assigned_to IS NULL OR assigned_to = '')`,
 			agent, time.Now(), id)
 		if err != nil {
@@ -316,10 +324,10 @@ func (s *Store) ClaimIssue(id, agent string) (bool, error) {
 	return claimed, err
 }
 
-// UnclaimIssue removes the assignment from an issue and resets it to open.
+// UnclaimIssue removes the assignment from an issue and resets it to todo.
 func (s *Store) UnclaimIssue(id string) error {
 	_, err := s.db.Exec(`
-		UPDATE issues SET assigned_to = NULL, status = 'open', updated_at = ?
+		UPDATE issues SET assigned_to = NULL, status = 'todo', updated_at = ?
 		WHERE id = ?`, time.Now(), id)
 	return err
 }

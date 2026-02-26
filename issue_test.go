@@ -7,15 +7,21 @@ import (
 )
 
 func TestStatusConstants(t *testing.T) {
-	// Verify status constants are defined
-	if StatusOpen != "open" {
-		t.Errorf("StatusOpen = %q, want %q", StatusOpen, "open")
+	// Verify 5-column kanban status constants
+	if StatusBacklog != "backlog" {
+		t.Errorf("StatusBacklog = %q, want %q", StatusBacklog, "backlog")
 	}
-	if StatusInProgress != "in_progress" {
-		t.Errorf("StatusInProgress = %q, want %q", StatusInProgress, "in_progress")
+	if StatusTodo != "todo" {
+		t.Errorf("StatusTodo = %q, want %q", StatusTodo, "todo")
 	}
-	if StatusClosed != "closed" {
-		t.Errorf("StatusClosed = %q, want %q", StatusClosed, "closed")
+	if StatusDoing != "doing" {
+		t.Errorf("StatusDoing = %q, want %q", StatusDoing, "doing")
+	}
+	if StatusReview != "review" {
+		t.Errorf("StatusReview = %q, want %q", StatusReview, "review")
+	}
+	if StatusDone != "done" {
+		t.Errorf("StatusDone = %q, want %q", StatusDone, "done")
 	}
 }
 
@@ -40,9 +46,14 @@ func TestValidStatus(t *testing.T) {
 		status Status
 		want   bool
 	}{
-		{StatusOpen, true},
-		{StatusInProgress, true},
-		{StatusClosed, true},
+		{StatusBacklog, true},
+		{StatusTodo, true},
+		{StatusDoing, true},
+		{StatusReview, true},
+		{StatusDone, true},
+		{"open", false},        // legacy status no longer valid
+		{"in_progress", false}, // legacy status no longer valid
+		{"closed", false},      // legacy status no longer valid
 		{"invalid", false},
 		{"", false},
 	}
@@ -125,8 +136,8 @@ func TestNewIssue(t *testing.T) {
 	if issue.Title != title {
 		t.Errorf("Title = %q, want %q", issue.Title, title)
 	}
-	if issue.Status != StatusOpen {
-		t.Errorf("Status = %q, want %q", issue.Status, StatusOpen)
+	if issue.Status != StatusBacklog {
+		t.Errorf("Status = %q, want %q", issue.Status, StatusBacklog)
 	}
 	if issue.Priority != 2 {
 		t.Errorf("Priority = %d, want 2 (medium)", issue.Priority)
@@ -164,7 +175,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:     "bl-test",
 				Title:  "Valid Title",
-				Status: StatusOpen,
+				Status: StatusTodo,
 				Type:   IssueTypeTask,
 			},
 			wantErr: false,
@@ -174,7 +185,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:     "bl-test",
 				Title:  "",
-				Status: StatusOpen,
+				Status: StatusTodo,
 				Type:   IssueTypeTask,
 			},
 			wantErr: true,
@@ -184,7 +195,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:     "bl-test",
 				Title:  "   ",
-				Status: StatusOpen,
+				Status: StatusTodo,
 				Type:   IssueTypeTask,
 			},
 			wantErr: true,
@@ -204,7 +215,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:     "bl-test",
 				Title:  "Valid Title",
-				Status: StatusOpen,
+				Status: StatusTodo,
 				Type:   "invalid",
 			},
 			wantErr: true,
@@ -214,7 +225,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:       "bl-test",
 				Title:    "Valid Title",
-				Status:   StatusOpen,
+				Status:   StatusTodo,
 				Type:     IssueTypeTask,
 				Priority: -1,
 			},
@@ -225,7 +236,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:       "bl-test",
 				Title:    "Valid Title",
-				Status:   StatusOpen,
+				Status:   StatusTodo,
 				Type:     IssueTypeTask,
 				Priority: 5,
 			},
@@ -236,7 +247,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:       "bl-test",
 				Title:    "Valid Title",
-				Status:   StatusOpen,
+				Status:   StatusTodo,
 				Type:     IssueTypeTask,
 				Priority: 0,
 			},
@@ -247,7 +258,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:       "bl-test",
 				Title:    "Valid Title",
-				Status:   StatusOpen,
+				Status:   StatusTodo,
 				Type:     IssueTypeTask,
 				Priority: 4,
 			},
@@ -258,7 +269,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:         "bl-test",
 				Title:      "Valid Title",
-				Status:     StatusClosed,
+				Status:     StatusDone,
 				Type:       IssueTypeTask,
 				Resolution: ResolutionDone,
 			},
@@ -269,7 +280,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:         "bl-test",
 				Title:      "Valid Title",
-				Status:     StatusClosed,
+				Status:     StatusDone,
 				Type:       IssueTypeTask,
 				Resolution: ResolutionWontfix,
 			},
@@ -280,7 +291,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:         "bl-test",
 				Title:      "Valid Title",
-				Status:     StatusClosed,
+				Status:     StatusDone,
 				Type:       IssueTypeTask,
 				Resolution: "",
 			},
@@ -291,7 +302,7 @@ func TestIssueValidate(t *testing.T) {
 			issue: Issue{
 				ID:         "bl-test",
 				Title:      "Valid Title",
-				Status:     StatusClosed,
+				Status:     StatusDone,
 				Type:       IssueTypeTask,
 				Resolution: "invalid",
 			},

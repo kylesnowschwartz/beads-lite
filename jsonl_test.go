@@ -18,7 +18,7 @@ func TestExportToJSONL(t *testing.T) {
 	issueA := &Issue{
 		ID:        "bl-a1b2",
 		Title:     "Task A",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  2,
 		Type:      IssueTypeTask,
 		CreatedAt: now,
@@ -27,7 +27,7 @@ func TestExportToJSONL(t *testing.T) {
 	issueB := &Issue{
 		ID:        "bl-c3d4",
 		Title:     "Task B",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  2,
 		Type:      IssueTypeTask,
 		CreatedAt: now,
@@ -85,8 +85,8 @@ func TestImportFromJSONL(t *testing.T) {
 	defer cleanup()
 
 	// JSONL input with two issues and a dependency
-	input := `{"id":"bl-x1y2","title":"Import Task X","status":"open","priority":1,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}
-{"id":"bl-z3w4","title":"Import Task Z","status":"in_progress","priority":3,"issue_type":"bug","created_at":"2026-01-01T01:00:00Z","updated_at":"2026-01-01T02:00:00Z","dependencies":[{"depends_on":"bl-x1y2","type":"blocks"}]}`
+	input := `{"id":"bl-x1y2","title":"Import Task X","status":"todo","priority":1,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}
+{"id":"bl-z3w4","title":"Import Task Z","status":"doing","priority":3,"issue_type":"bug","created_at":"2026-01-01T01:00:00Z","updated_at":"2026-01-01T02:00:00Z","dependencies":[{"depends_on":"bl-x1y2","type":"blocks"}]}`
 
 	reader := strings.NewReader(input)
 	stats, err := ImportFromJSONL(store, reader)
@@ -143,7 +143,7 @@ func TestImportFromJSONL_Upsert(t *testing.T) {
 	existing := &Issue{
 		ID:        "bl-existing",
 		Title:     "Original Title",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  2,
 		Type:      IssueTypeTask,
 		CreatedAt: time.Now(),
@@ -154,7 +154,7 @@ func TestImportFromJSONL_Upsert(t *testing.T) {
 	}
 
 	// Import with updated title
-	input := `{"id":"bl-existing","title":"Updated Title","status":"in_progress","priority":1,"issue_type":"feature","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+	input := `{"id":"bl-existing","title":"Updated Title","status":"doing","priority":1,"issue_type":"feature","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
 
 	reader := strings.NewReader(input)
 	stats, err := ImportFromJSONL(store, reader)
@@ -177,7 +177,7 @@ func TestImportFromJSONL_Upsert(t *testing.T) {
 	if issue.Title != "Updated Title" {
 		t.Errorf("expected 'Updated Title', got %q", issue.Title)
 	}
-	if issue.Status != StatusInProgress {
+	if issue.Status != StatusDoing {
 		t.Errorf("expected 'in_progress', got %q", issue.Status)
 	}
 }
@@ -191,7 +191,7 @@ func TestRoundTrip(t *testing.T) {
 	issueA := &Issue{
 		ID:        "bl-rt01",
 		Title:     "Round Trip A",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  1,
 		Type:      IssueTypeBug,
 		CreatedAt: now,
@@ -200,7 +200,7 @@ func TestRoundTrip(t *testing.T) {
 	issueB := &Issue{
 		ID:        "bl-rt02",
 		Title:     "Round Trip B",
-		Status:    StatusInProgress,
+		Status:    StatusDoing,
 		Priority:  2,
 		Type:      IssueTypeFeature,
 		CreatedAt: now,
@@ -209,7 +209,7 @@ func TestRoundTrip(t *testing.T) {
 	issueC := &Issue{
 		ID:        "bl-rt03",
 		Title:     "Round Trip C",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  3,
 		Type:      IssueTypeTask,
 		CreatedAt: now,
@@ -276,7 +276,7 @@ func TestExportToFile(t *testing.T) {
 	issue := &Issue{
 		ID:        "bl-file",
 		Title:     "File Export Test",
-		Status:    StatusOpen,
+		Status:    StatusTodo,
 		Priority:  2,
 		Type:      IssueTypeTask,
 		CreatedAt: now,
@@ -312,7 +312,7 @@ func TestImportFromFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "import.jsonl")
 
-	content := `{"id":"bl-fromfile","title":"From File","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
+	content := `{"id":"bl-fromfile","title":"From File","status":"todo","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[]}`
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestRoundTrip_DescriptionAndResolution(t *testing.T) {
 		ID:          "bl-desc1",
 		Title:       "Has Description",
 		Description: "This is a detailed description\nwith multiple lines",
-		Status:      StatusOpen,
+		Status:      StatusTodo,
 		Priority:    2,
 		Type:        IssueTypeTask,
 		CreatedAt:   now,
@@ -359,7 +359,7 @@ func TestRoundTrip_DescriptionAndResolution(t *testing.T) {
 	closedIssue := &Issue{
 		ID:         "bl-closed1",
 		Title:      "Closed Issue",
-		Status:     StatusClosed,
+		Status:     StatusDone,
 		Priority:   1,
 		Type:       IssueTypeBug,
 		Resolution: ResolutionWontfix,
@@ -372,7 +372,7 @@ func TestRoundTrip_DescriptionAndResolution(t *testing.T) {
 	closedDupe := &Issue{
 		ID:         "bl-closed2",
 		Title:      "Duplicate Issue",
-		Status:     StatusClosed,
+		Status:     StatusDone,
 		Priority:   3,
 		Type:       IssueTypeTask,
 		Resolution: ResolutionDuplicate,
@@ -420,8 +420,8 @@ func TestRoundTrip_DescriptionAndResolution(t *testing.T) {
 	if gotWontfix.Resolution != ResolutionWontfix {
 		t.Errorf("Resolution not preserved: got %q, want %q", gotWontfix.Resolution, ResolutionWontfix)
 	}
-	if gotWontfix.Status != StatusClosed {
-		t.Errorf("Status not preserved: got %q, want %q", gotWontfix.Status, StatusClosed)
+	if gotWontfix.Status != StatusDone {
+		t.Errorf("Status not preserved: got %q, want %q", gotWontfix.Status, StatusDone)
 	}
 
 	// Verify resolution preserved for duplicate

@@ -76,7 +76,7 @@ func TestStoreUpdateIssue(t *testing.T) {
 
 	// Update
 	issue.Title = "Updated Title"
-	issue.Status = StatusInProgress
+	issue.Status = StatusDoing
 	err := store.UpdateIssue(issue)
 	if err != nil {
 		t.Fatalf("UpdateIssue() error = %v", err)
@@ -87,8 +87,8 @@ func TestStoreUpdateIssue(t *testing.T) {
 	if got.Title != "Updated Title" {
 		t.Errorf("Title = %q, want %q", got.Title, "Updated Title")
 	}
-	if got.Status != StatusInProgress {
-		t.Errorf("Status = %q, want %q", got.Status, StatusInProgress)
+	if got.Status != StatusDoing {
+		t.Errorf("Status = %q, want %q", got.Status, StatusDoing)
 	}
 }
 
@@ -105,8 +105,8 @@ func TestStoreCloseIssue(t *testing.T) {
 	}
 
 	got, _ := store.GetIssue(issue.ID)
-	if got.Status != StatusClosed {
-		t.Errorf("Status = %q, want %q", got.Status, StatusClosed)
+	if got.Status != StatusDone {
+		t.Errorf("Status = %q, want %q", got.Status, StatusDone)
 	}
 	if got.ClosedAt == nil {
 		t.Error("ClosedAt should be set")
@@ -175,10 +175,13 @@ func TestStoreGetReadyWork(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()
 
-	// Create chain: A blocks B blocks C
+	// Create chain: A blocks B blocks C (all set to todo so they appear in ready work)
 	issueA := NewIssue("Task A")
+	issueA.Status = StatusTodo
 	issueB := NewIssue("Task B")
+	issueB.Status = StatusTodo
 	issueC := NewIssue("Task C")
+	issueC.Status = StatusTodo
 	store.CreateIssue(issueA)
 	store.CreateIssue(issueB)
 	store.CreateIssue(issueC)
@@ -416,8 +419,8 @@ func TestStoreClaimIssue(t *testing.T) {
 	if got.AssignedTo != "agent-1" {
 		t.Errorf("AssignedTo = %q, want %q", got.AssignedTo, "agent-1")
 	}
-	if got.Status != StatusInProgress {
-		t.Errorf("Status = %q, want %q", got.Status, StatusInProgress)
+	if got.Status != StatusDoing {
+		t.Errorf("Status = %q, want %q", got.Status, StatusDoing)
 	}
 }
 
@@ -488,8 +491,8 @@ func TestStoreUnclaimIssue(t *testing.T) {
 	if got.AssignedTo != "" {
 		t.Errorf("AssignedTo = %q, want empty", got.AssignedTo)
 	}
-	if got.Status != StatusOpen {
-		t.Errorf("Status = %q, want %q", got.Status, StatusOpen)
+	if got.Status != StatusTodo {
+		t.Errorf("Status = %q, want %q", got.Status, StatusTodo)
 	}
 
 	// Another agent should now be able to claim

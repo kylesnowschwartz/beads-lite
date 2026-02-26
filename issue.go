@@ -13,15 +13,17 @@ import (
 type Status string
 
 const (
-	StatusOpen       Status = "open"
-	StatusInProgress Status = "in_progress"
-	StatusClosed     Status = "closed"
+	StatusBacklog Status = "backlog"
+	StatusTodo    Status = "todo"
+	StatusDoing   Status = "doing"
+	StatusReview  Status = "review"
+	StatusDone    Status = "done"
 )
 
 // Valid returns true if the status is a known valid status.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusOpen, StatusInProgress, StatusClosed:
+	case StatusBacklog, StatusTodo, StatusDoing, StatusReview, StatusDone:
 		return true
 	default:
 		return false
@@ -91,7 +93,7 @@ func NewIssue(title string) *Issue {
 	return &Issue{
 		ID:        id,
 		Title:     title,
-		Status:    StatusOpen,
+		Status:    StatusBacklog,
 		Priority:  2, // Medium priority by default
 		Type:      IssueTypeTask,
 		CreatedAt: now,
