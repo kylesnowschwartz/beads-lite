@@ -1585,6 +1585,172 @@ func TestCLI_List_InvalidPriority(t *testing.T) {
 	}
 }
 
+// --- Shorthand priority flag tests (-p0 through -p4) ---
+
+func TestCLI_Create_ShorthandPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	cases := []struct {
+		flag     string
+		expected string
+	}{
+		{"-p0", "P0"},
+		{"-p1", "P1"},
+		{"-p2", "P2"},
+		{"-p3", "P3"},
+		{"-p4", "P4"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.flag, func(t *testing.T) {
+			out, err := runCLI([]string{"create", "Task " + tc.flag, tc.flag})
+			if err != nil {
+				t.Fatalf("create with %s failed: %v", tc.flag, err)
+			}
+			id := extractID(out)
+			showOut, _ := runCLI([]string{"show", id})
+			if !strings.Contains(showOut, tc.expected) {
+				t.Errorf("expected %s in output, got: %s", tc.expected, showOut)
+			}
+		})
+	}
+}
+
+func TestCLI_Update_ShorthandPriority(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	out, _ := runCLI([]string{"create", "Task"})
+	id := extractID(out)
+
+	_, err := runCLI([]string{"update", id, "-p0"})
+	if err != nil {
+		t.Fatalf("update with -p0 failed: %v", err)
+	}
+
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "P0") {
+		t.Errorf("expected P0 after update, got: %s", showOut)
+	}
+}
+
+func TestCLI_List_ShorthandPriorityFilter(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	outP1, _ := runCLI([]string{"create", "P1 Task"})
+	idP1 := extractID(outP1)
+	runCLI([]string{"update", idP1, "--priority", "1"})
+
+	runCLI([]string{"create", "P2 Task"}) // default is P2
+
+	out, err := runCLI([]string{"list", "-p1"})
+	if err != nil {
+		t.Fatalf("list -p1 failed: %v", err)
+	}
+	if !strings.Contains(out, "P1 Task") {
+		t.Errorf("expected P1 Task in output, got: %s", out)
+	}
+	if strings.Contains(out, "P2 Task") {
+		t.Errorf("expected P2 Task excluded, got: %s", out)
+	}
+}
+
+func TestCLI_Ready_ShorthandPriorityFilter(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	outP0, _ := runCLI([]string{"create", "P0 Task"})
+	idP0 := extractID(outP0)
+	runCLI([]string{"update", idP0, "--priority", "0"})
+
+	runCLI([]string{"create", "P2 Task"}) // default is P2
+
+	out, err := runCLI([]string{"ready", "-p0"})
+	if err != nil {
+		t.Fatalf("ready -p0 failed: %v", err)
+	}
+	if !strings.Contains(out, "P0 Task") {
+		t.Errorf("expected P0 Task in output, got: %s", out)
+	}
+	if strings.Contains(out, "P2 Task") {
+		t.Errorf("expected P2 Task excluded, got: %s", out)
+	}
+}
+
+func TestCLI_ShorthandPriority_MultipleFlags_Error(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// -p1 -p2 together should error on create
+	_, err := runCLI([]string{"create", "test", "-p1", "-p2"})
+	if err == nil {
+		t.Error("create -p1 -p2 should fail")
+	}
+
+	// -p0 -p3 together should error on update
+	out, _ := runCLI([]string{"create", "task"})
+	id := extractID(out)
+	_, err = runCLI([]string{"update", id, "-p0", "-p3"})
+	if err == nil {
+		t.Error("update -p0 -p3 should fail")
+	}
+
+	// -p1 -p4 together should error on list
+	_, err = runCLI([]string{"list", "-p1", "-p4"})
+	if err == nil {
+		t.Error("list -p1 -p4 should fail")
+	}
+}
+
+func TestCLI_ShorthandPriority_ConflictWithLongFlag_Error(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// -p1 and --priority 2 together should error on create
+	_, err := runCLI([]string{"create", "test", "-p1", "--priority", "2"})
+	if err == nil {
+		t.Error("create -p1 --priority 2 should fail")
+	}
+
+	// -p0 and --priority 1 together should error on update
+	out, _ := runCLI([]string{"create", "task"})
+	id := extractID(out)
+	_, err = runCLI([]string{"update", id, "-p0", "--priority", "1"})
+	if err == nil {
+		t.Error("update -p0 --priority 1 should fail")
+	}
+
+	// -p2 and --priority 3 together should error on list
+	_, err = runCLI([]string{"list", "-p2", "--priority", "3"})
+	if err == nil {
+		t.Error("list -p2 --priority 3 should fail")
+	}
+
+	// -p1 and --priority 2 together should error on ready
+	_, err = runCLI([]string{"ready", "-p1", "--priority", "2"})
+	if err == nil {
+		t.Error("ready -p1 --priority 2 should fail")
+	}
+}
+
+func TestCLI_ShorthandPriority_LongFlagStillWorks(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Existing --priority flag must keep working
+	out, err := runCLI([]string{"create", "Long Flag Task", "--priority", "0"})
+	if err != nil {
+		t.Fatalf("create --priority 0 failed: %v", err)
+	}
+	id := extractID(out)
+	showOut, _ := runCLI([]string{"show", id})
+	if !strings.Contains(showOut, "P0") {
+		t.Errorf("expected P0 with --priority 0, got: %s", showOut)
+	}
+}
+
 func TestCLI_List_InvalidType(t *testing.T) {
 	setupTestDir(t)
 	runCLI([]string{"init"})

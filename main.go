@@ -103,6 +103,7 @@ List/Ready Flags:
   --json                Output as JSONL (one JSON object per line)
   --tree                Show dependency tree
   --priority <int>      Filter by priority (0-4)
+  -p0, -p1, -p2, -p3, -p4  Shorthand priority filter (e.g. -p1 == --priority 1)
   --type <string>       Filter by type (task, bug, feature, epic)
   --assigned-to <name>  Filter by assignee
 
@@ -120,6 +121,7 @@ Show Flags:
 Create Flags:
   --description <text>  Issue description
   --priority <int>      Priority (0-4), default 2
+  -p0, -p1, -p2, -p3, -p4  Shorthand priority (e.g. -p1 == --priority 1)
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
   --epic <id>           Parent epic (groups under epic without blocking)
@@ -128,6 +130,7 @@ Update Flags:
   --title <string>      New title
   --status <string>     New status (backlog, todo, doing, review, done)
   --priority <int>      New priority (0-4)
+  -p0, -p1, -p2, -p3, -p4  Shorthand priority (e.g. -p1 == --priority 1)
   --type <string>       New type (task, bug, feature, epic)
   --description <text>  New description
   --blocked-by <id>     Add blocker (repeatable)
@@ -195,14 +198,27 @@ func cmdCreate(args []string, w io.Writer) error {
 	issueType := fs.String("type", "task", "Type (task, bug, feature, epic)")
 	blockedBy := fs.StringSlice("blocked-by", nil, "Issue ID that blocks this (repeatable)")
 	epicID := fs.String("epic", "", "Parent epic ID (groups under epic without blocking)")
+	var sh priorityShorthands
+	addPriorityShorthands(fs, &sh)
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(expandPriorityShorthands(args)); err != nil {
 		return err
 	}
 
-	priority, err := parsePriority(*priorityStr)
+	longPriority, err := parsePriority(*priorityStr)
 	if err != nil {
 		return err
+	}
+
+	priority, err := resolvePriorityShorthands(sh, fs.Changed("priority"), longPriority)
+	if err != nil {
+		return err
+	}
+	// For create, a missing --priority means use the default (2), not "no filter".
+	// parsePriority returns -1 for empty string, but the default is "2" so this
+	// only triggers when the user explicitly clears the flag — treat -1 as default.
+	if priority < 0 {
+		priority = 2
 	}
 
 	remaining := fs.Args()
@@ -253,12 +269,19 @@ func cmdList(args []string, w io.Writer) error {
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 	resolutionFilter := fs.String("resolution", "", "Filter by resolution (done, wontfix, duplicate)")
 	assignedToFilter := fs.String("assigned-to", "", "Filter by assignee")
+	var sh priorityShorthands
+	addPriorityShorthands(fs, &sh)
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(expandPriorityShorthands(args)); err != nil {
 		return err
 	}
 
-	priorityFilter, err := parsePriority(*priorityStr)
+	longPriorityFilter, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
+	priorityFilter, err := resolvePriorityShorthands(sh, fs.Changed("priority"), longPriorityFilter)
 	if err != nil {
 		return err
 	}
@@ -423,6 +446,75 @@ func parsePriority(s string) (int, error) {
 	return n, nil
 }
 
+// priorityShorthands holds -p0 through -p4 boolean flags for shorthand priority input.
+type priorityShorthands struct {
+	p0, p1, p2, p3, p4 bool
+}
+
+// addPriorityShorthands registers --p0 through --p4 on the given FlagSet.
+// These are long-form flags (double-dash) internally; expandPriorityShorthands
+// rewrites single-dash -pN to --pN before parsing so the user can type either form.
+func addPriorityShorthands(fs *flag.FlagSet, sh *priorityShorthands) {
+	fs.BoolVar(&sh.p0, "p0", false, "Shorthand for --priority 0")
+	fs.BoolVar(&sh.p1, "p1", false, "Shorthand for --priority 1")
+	fs.BoolVar(&sh.p2, "p2", false, "Shorthand for --priority 2")
+	fs.BoolVar(&sh.p3, "p3", false, "Shorthand for --priority 3")
+	fs.BoolVar(&sh.p4, "p4", false, "Shorthand for --priority 4")
+}
+
+// expandPriorityShorthands rewrites -p0 through -p4 to --p0 through --p4 in args
+// so pflag's long-flag parser handles them correctly. Other args are unchanged.
+func expandPriorityShorthands(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch a {
+		case "-p0", "-p1", "-p2", "-p3", "-p4":
+			out[i] = "-" + a // turn "-p0" into "--p0"
+		default:
+			out[i] = a
+		}
+	}
+	return out
+}
+
+// resolvePriorityShorthands checks -p0 through -p4 flags against --priority.
+// Returns the resolved priority value or an error on conflict.
+// priorityFlagChanged reports whether --priority was explicitly set by the user.
+func resolvePriorityShorthands(sh priorityShorthands, priorityFlagChanged bool, longPriority int) (int, error) {
+	// Count how many shorthand flags are set.
+	set := []int{}
+	if sh.p0 {
+		set = append(set, 0)
+	}
+	if sh.p1 {
+		set = append(set, 1)
+	}
+	if sh.p2 {
+		set = append(set, 2)
+	}
+	if sh.p3 {
+		set = append(set, 3)
+	}
+	if sh.p4 {
+		set = append(set, 4)
+	}
+
+	if len(set) > 1 {
+		return 0, fmt.Errorf("only one -pN flag may be set at a time (got -p%d and -p%d)", set[0], set[1])
+	}
+
+	if len(set) == 1 && priorityFlagChanged {
+		return 0, fmt.Errorf("-p%d and --priority cannot be used together", set[0])
+	}
+
+	if len(set) == 1 {
+		return set[0], nil
+	}
+
+	// No shorthand — return the long-form value as-is (may be -1 for "no filter").
+	return longPriority, nil
+}
+
 // validateFilters checks that filter values are valid before applying them.
 func validateFilters(status string, priority int, issueType string, resolution string) error {
 	if status != "" && !Status(status).Valid() {
@@ -543,12 +635,19 @@ func cmdUpdate(args []string, w io.Writer) error {
 	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
 	epicID := fs.String("epic", "", "Set parent epic (groups under epic without blocking)")
 	removeEpic := fs.String("remove-epic", "", "Remove parent epic link")
+	var sh priorityShorthands
+	addPriorityShorthands(fs, &sh)
 
-	if err := fs.Parse(flagArgs); err != nil {
+	if err := fs.Parse(expandPriorityShorthands(flagArgs)); err != nil {
 		return err
 	}
 
-	priority, err := parsePriority(*priorityStr)
+	longPriority, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
+	priority, err := resolvePriorityShorthands(sh, fs.Changed("priority"), longPriority)
 	if err != nil {
 		return err
 	}
@@ -845,12 +944,19 @@ func cmdReady(args []string, w io.Writer) error {
 	typeFilter := fs.String("type", "", "Filter by type (task, bug, feature, epic)")
 	unclaimedFlag := fs.Bool("unclaimed", false, "Only show unclaimed tasks")
 	assignedToFilter := fs.String("assigned-to", "", "Filter by assignee")
+	var sh priorityShorthands
+	addPriorityShorthands(fs, &sh)
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(expandPriorityShorthands(args)); err != nil {
 		return err
 	}
 
-	priorityFilter, err := parsePriority(*priorityStr)
+	longPriorityFilter, err := parsePriority(*priorityStr)
+	if err != nil {
+		return err
+	}
+
+	priorityFilter, err := resolvePriorityShorthands(sh, fs.Changed("priority"), longPriorityFilter)
 	if err != nil {
 		return err
 	}
