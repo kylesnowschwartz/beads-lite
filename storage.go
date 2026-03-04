@@ -13,6 +13,44 @@ import (
 // ErrIssueNotFound is returned when an issue does not exist in the database.
 var ErrIssueNotFound = errors.New("issue not found")
 
+// Storage is the interface that wraps all persistence operations for issues and dependencies.
+// *Store is the concrete SQLite implementation; callers that only need the interface
+// can depend on Storage to allow alternative implementations in tests or other backends.
+type Storage interface {
+	// Lifecycle
+	Close() error
+	WithTransaction(fn func() error) error
+
+	// Issue CRUD
+	CreateIssue(issue *Issue) error
+	GetIssue(id string) (*Issue, error)
+	UpdateIssue(issue *Issue) error
+	ListIssues() ([]*Issue, error)
+	DeleteIssue(id string) error
+
+	// Issue workflow
+	CloseIssue(id string, resolution Resolution) error
+	ClaimIssue(id, agent string) (bool, error)
+	UnclaimIssue(id string) error
+
+	// Agent state
+	SetAgentState(issueID string, state AgentState, activity *time.Time) error
+	GetAgentsByState(state AgentState) ([]*Issue, error)
+
+	// Dependencies
+	AddDependency(issueID, dependsOnID string, depType DepType) error
+	RemoveDependency(issueID, dependsOnID string, depType DepType) error
+	RemoveAllDependencies(issueID string) error
+	GetDependencies(issueID string) ([]*Dependency, error)
+	GetAllDependencies() (map[string][]*Dependency, error)
+
+	// Scheduling
+	GetReadyWork() ([]*Issue, error)
+}
+
+// Compile-time check: *Store must implement Storage.
+var _ Storage = (*Store)(nil)
+
 // Store provides SQLite-backed storage for issues and dependencies.
 type Store struct {
 	db *sql.DB
