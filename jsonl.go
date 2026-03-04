@@ -25,6 +25,8 @@ type IssueExport struct {
 	UpdatedAt    time.Time          `json:"updated_at"`
 	ClosedAt     *time.Time         `json:"closed_at,omitempty"`
 	Resolution   Resolution         `json:"resolution,omitempty"`
+	AgentState   AgentState         `json:"agent_state,omitempty"`
+	LastActivity *time.Time         `json:"last_activity,omitempty"`
 	Dependencies []DependencyExport `json:"dependencies"`
 }
 
@@ -54,6 +56,8 @@ func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
 		UpdatedAt:    issue.UpdatedAt,
 		ClosedAt:     issue.ClosedAt,
 		Resolution:   issue.Resolution,
+		AgentState:   issue.AgentState,
+		LastActivity: issue.LastActivity,
 		Dependencies: make([]DependencyExport, len(deps)),
 	}
 	for i, dep := range deps {
@@ -163,17 +167,19 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 			}
 
 			issue := &Issue{
-				ID:          export.ID,
-				Title:       export.Title,
-				Description: export.Description,
-				Status:      export.Status,
-				Priority:    export.Priority,
-				Type:        export.Type,
-				AssignedTo:  export.AssignedTo,
-				CreatedAt:   export.CreatedAt,
-				UpdatedAt:   export.UpdatedAt,
-				ClosedAt:    export.ClosedAt,
-				Resolution:  export.Resolution,
+				ID:           export.ID,
+				Title:        export.Title,
+				Description:  export.Description,
+				Status:       export.Status,
+				Priority:     export.Priority,
+				Type:         export.Type,
+				AssignedTo:   export.AssignedTo,
+				CreatedAt:    export.CreatedAt,
+				UpdatedAt:    export.UpdatedAt,
+				ClosedAt:     export.ClosedAt,
+				Resolution:   export.Resolution,
+				AgentState:   export.AgentState,
+				LastActivity: export.LastActivity,
 			}
 
 			if existing != nil {

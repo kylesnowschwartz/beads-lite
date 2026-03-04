@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	flag "github.com/spf13/pflag"
 )
@@ -55,6 +56,8 @@ func Run(args []string, w io.Writer) error {
 		return cmdClaim(cmdArgs, w)
 	case "unclaim":
 		return cmdUnclaim(cmdArgs, w)
+	case "agent-state":
+		return cmdAgentState(cmdArgs, w)
 	case "ready":
 		return cmdReady(cmdArgs, w)
 	case "export":
@@ -88,6 +91,7 @@ Commands:
   close <id>            Close an issue
   claim <id>            Atomically claim an issue (for multi-agent use)
   unclaim <id>          Release a claimed issue
+  agent-state <id>      Set or query agent liveness state
   ready                 List unblocked work
   export [file]         Export all issues to JSONL (stdout or file)
   import <file>         Import issues from JSONL file
@@ -138,7 +142,11 @@ Close Flags:
   --resolution <string> Resolution (done, wontfix, duplicate), default done
 
 Delete Flags:
-  --confirm             Required to confirm permanent deletion`)
+  --confirm             Required to confirm permanent deletion
+
+Agent-State Flags:
+  --state <string>      Agent state to set (idle, running, stuck, done, dead)
+  --list                List issues matching the given --state`)
 }
 
 func getDBPath() string {
@@ -496,6 +504,12 @@ func cmdShow(args []string, w io.Writer) error {
 	if issue.Resolution != "" {
 		fmt.Fprintf(w, "Resolution: %s\n", issue.Resolution)
 	}
+	if issue.AgentState != "" {
+		fmt.Fprintf(w, "AgentState: %s\n", issue.AgentState)
+	}
+	if issue.LastActivity != nil {
+		fmt.Fprintf(w, "LastActivity: %s\n", issue.LastActivity.Format("2006-01-02 15:04:05"))
+	}
 
 	// Show dependencies
 	deps, err := store.GetDependencies(id)
@@ -754,6 +768,70 @@ func cmdUnclaim(args []string, w io.Writer) error {
 	}
 
 	fmt.Fprintf(w, "Unclaimed %s: %s\n", id, issue.Title)
+	return nil
+}
+
+// cmdAgentState sets or queries the agent_state field on an issue.
+// Without --list, it updates the state of a single issue.
+// With --list, it lists all issues in the given state (no id required).
+func cmdAgentState(args []string, w io.Writer) error {
+	fs := flag.NewFlagSet("agent-state", flag.ContinueOnError)
+	fs.SetOutput(w)
+	stateFlag := fs.String("state", "", "Agent state (idle, running, stuck, done, dead)")
+	listFlag := fs.Bool("list", false, "List issues matching --state")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *stateFlag == "" {
+		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead>\n       bl agent-state --state <state> --list")
+	}
+
+	state := AgentState(*stateFlag)
+	if !state.Valid() || state == "" {
+		return fmt.Errorf("invalid agent state: %q (valid: idle, running, stuck, done, dead)", *stateFlag)
+	}
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	if *listFlag {
+		issues, err := store.GetAgentsByState(state)
+		if err != nil {
+			return fmt.Errorf("failed to list agents by state: %w", err)
+		}
+		if len(issues) == 0 {
+			fmt.Fprintln(w, "No issues found")
+			return nil
+		}
+		for _, issue := range issues {
+			fmt.Fprintln(w, formatIssueLine(issue))
+		}
+		return nil
+	}
+
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead>")
+	}
+	id := remaining[0]
+
+	// Verify issue exists before updating state
+	issue, err := store.GetIssue(id)
+	if err != nil {
+		return fmt.Errorf("issue %s: %w", id, err)
+	}
+
+	now := time.Now()
+	if err := store.SetAgentState(id, state, &now); err != nil {
+		return fmt.Errorf("failed to set agent state: %w", err)
+	}
+
+	fmt.Fprintf(w, "Updated %s agent_state=%s: %s\n", id, state, issue.Title)
 	return nil
 }
 

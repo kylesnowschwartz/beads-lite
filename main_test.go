@@ -2516,3 +2516,101 @@ func TestCLI_BLRoot_Override(t *testing.T) {
 		t.Errorf("expected task in output, got: %s", out)
 	}
 }
+
+func TestCLI_AgentState_Set(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Agent Task"})
+	id := extractID(createOut)
+
+	out, err := runCLI([]string{"agent-state", id, "--state", "running"})
+	if err != nil {
+		t.Fatalf("agent-state set failed: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, "agent_state=running") {
+		t.Errorf("expected agent_state=running in output, got: %s", out)
+	}
+
+	// Show the issue to confirm the state persisted
+	showOut, err := runCLI([]string{"show", id})
+	if err != nil {
+		t.Fatalf("show failed: %v", err)
+	}
+	if !strings.Contains(showOut, "running") {
+		t.Errorf("expected 'running' in show output, got: %s", showOut)
+	}
+}
+
+func TestCLI_AgentState_List(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut1, _ := runCLI([]string{"create", "Running Task A"})
+	createOut2, _ := runCLI([]string{"create", "Running Task B"})
+	createOut3, _ := runCLI([]string{"create", "Idle Task"})
+	id1 := extractID(createOut1)
+	id2 := extractID(createOut2)
+	id3 := extractID(createOut3)
+
+	runCLI([]string{"agent-state", id1, "--state", "running"})
+	runCLI([]string{"agent-state", id2, "--state", "running"})
+	runCLI([]string{"agent-state", id3, "--state", "idle"})
+
+	out, err := runCLI([]string{"agent-state", "--state", "running", "--list"})
+	if err != nil {
+		t.Fatalf("agent-state --list failed: %v", err)
+	}
+	if !strings.Contains(out, "Running Task A") {
+		t.Errorf("expected 'Running Task A' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "Running Task B") {
+		t.Errorf("expected 'Running Task B' in output, got: %s", out)
+	}
+	if strings.Contains(out, "Idle Task") {
+		t.Errorf("'Idle Task' should not appear in running list, got: %s", out)
+	}
+}
+
+func TestCLI_AgentState_InvalidState(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Some Task"})
+	id := extractID(createOut)
+
+	_, err := runCLI([]string{"agent-state", id, "--state", "bogus"})
+	if err == nil {
+		t.Error("expected error for invalid agent state")
+	}
+}
+
+func TestCLI_AgentState_NoState(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	_, err := runCLI([]string{"agent-state", "bl-xxxx"})
+	if err == nil {
+		t.Error("expected error when --state is not provided")
+	}
+}
+
+func TestCLI_ListJSON_IncludesAgentState(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "JSON Task"})
+	id := extractID(createOut)
+	runCLI([]string{"agent-state", id, "--state", "stuck"})
+
+	out, err := runCLI([]string{"list", "--json"})
+	if err != nil {
+		t.Fatalf("list --json failed: %v", err)
+	}
+	if !strings.Contains(out, `"agent_state":"stuck"`) {
+		t.Errorf("expected agent_state in JSON output, got: %s", out)
+	}
+	if !strings.Contains(out, `"last_activity"`) {
+		t.Errorf("expected last_activity in JSON output, got: %s", out)
+	}
+}

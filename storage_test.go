@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNewStore(t *testing.T) {
@@ -574,6 +575,198 @@ func TestStoreConcurrentClaim(t *testing.T) {
 	// Exactly one agent should have won the race
 	if winCount != 1 {
 		t.Errorf("expected exactly 1 winner, got %d", winCount)
+	}
+}
+
+func TestStoreSetAgentState(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Agent task")
+	if err := store.CreateIssue(issue); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	now := time.Now()
+	if err := store.SetAgentState(issue.ID, AgentStateRunning, &now); err != nil {
+		t.Fatalf("SetAgentState() error = %v", err)
+	}
+
+	got, err := store.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.AgentState != AgentStateRunning {
+		t.Errorf("AgentState = %q, want %q", got.AgentState, AgentStateRunning)
+	}
+	if got.LastActivity == nil {
+		t.Error("LastActivity should be set")
+	}
+}
+
+func TestStoreSetAgentStateInvalid(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Agent task")
+	store.CreateIssue(issue)
+
+	err := store.SetAgentState(issue.ID, AgentState("invalid"), nil)
+	if err == nil {
+		t.Error("SetAgentState() should return error for invalid state")
+	}
+}
+
+func TestStoreGetAgentsByState(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issueA := NewIssue("Running task A")
+	issueB := NewIssue("Running task B")
+	issueC := NewIssue("Idle task")
+	store.CreateIssue(issueA)
+	store.CreateIssue(issueB)
+	store.CreateIssue(issueC)
+
+	now := time.Now()
+	store.SetAgentState(issueA.ID, AgentStateRunning, &now)
+	store.SetAgentState(issueB.ID, AgentStateRunning, &now)
+	store.SetAgentState(issueC.ID, AgentStateIdle, &now)
+
+	running, err := store.GetAgentsByState(AgentStateRunning)
+	if err != nil {
+		t.Fatalf("GetAgentsByState() error = %v", err)
+	}
+	if len(running) != 2 {
+		t.Errorf("GetAgentsByState(running) returned %d issues, want 2", len(running))
+	}
+
+	idle, err := store.GetAgentsByState(AgentStateIdle)
+	if err != nil {
+		t.Fatalf("GetAgentsByState() error = %v", err)
+	}
+	if len(idle) != 1 {
+		t.Errorf("GetAgentsByState(idle) returned %d issues, want 1", len(idle))
+	}
+
+	stuck, err := store.GetAgentsByState(AgentStateStuck)
+	if err != nil {
+		t.Fatalf("GetAgentsByState() error = %v", err)
+	}
+	if len(stuck) != 0 {
+		t.Errorf("GetAgentsByState(stuck) returned %d issues, want 0", len(stuck))
+	}
+}
+
+func TestStoreAgentStateRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Lifecycle task")
+	store.CreateIssue(issue)
+
+	// Verify default state is empty
+	got, _ := store.GetIssue(issue.ID)
+	if got.AgentState != "" {
+		t.Errorf("default AgentState = %q, want empty", got.AgentState)
+	}
+	if got.LastActivity != nil {
+		t.Error("default LastActivity should be nil")
+	}
+
+	// Transition through states
+	now := time.Now()
+	for _, state := range []AgentState{AgentStateRunning, AgentStateStuck, AgentStateDone} {
+		if err := store.SetAgentState(issue.ID, state, &now); err != nil {
+			t.Fatalf("SetAgentState(%q) error = %v", state, err)
+		}
+		got, _ = store.GetIssue(issue.ID)
+		if got.AgentState != state {
+			t.Errorf("AgentState = %q, want %q", got.AgentState, state)
+		}
+	}
+
+	// Clear state by setting to idle with nil activity
+	if err := store.SetAgentState(issue.ID, AgentStateIdle, nil); err != nil {
+		t.Fatalf("SetAgentState(idle, nil) error = %v", err)
+	}
+	got, _ = store.GetIssue(issue.ID)
+	if got.AgentState != AgentStateIdle {
+		t.Errorf("AgentState = %q, want %q", got.AgentState, AgentStateIdle)
+	}
+	if got.LastActivity != nil {
+		t.Error("LastActivity should be nil when set to nil")
+	}
+}
+
+func TestStoreAgentStatePreservedOnUpdate(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := NewIssue("Task with agent state")
+	store.CreateIssue(issue)
+
+	now := time.Now()
+	store.SetAgentState(issue.ID, AgentStateRunning, &now)
+
+	// Fetch, modify title, update — agent_state should round-trip
+	got, _ := store.GetIssue(issue.ID)
+	got.Title = "Updated title"
+	if err := store.UpdateIssue(got); err != nil {
+		t.Fatalf("UpdateIssue() error = %v", err)
+	}
+
+	after, _ := store.GetIssue(issue.ID)
+	if after.AgentState != AgentStateRunning {
+		t.Errorf("AgentState = %q after UpdateIssue, want %q", after.AgentState, AgentStateRunning)
+	}
+	if after.LastActivity == nil {
+		t.Error("LastActivity should still be set after UpdateIssue")
+	}
+}
+
+func TestStoreAgentStateBackwardCompatibility(t *testing.T) {
+	// Open a new store (simulates existing DB getting new columns via migration).
+	// In-memory DBs are always fresh, so we use a file-based DB to test migration.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "compat.db")
+
+	store1, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	issue := NewIssue("Pre-migration task")
+	store1.CreateIssue(issue)
+	store1.Close()
+
+	// Reopen: migrateSchema should add the columns without error
+	store2, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore() reopen error = %v", err)
+	}
+	defer store2.Close()
+
+	// Old issue should still be readable with zero agent state
+	got, err := store2.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() after migration error = %v", err)
+	}
+	if got.ID != issue.ID {
+		t.Errorf("ID = %q, want %q", got.ID, issue.ID)
+	}
+	if got.AgentState != "" {
+		t.Errorf("AgentState = %q, want empty (pre-migration row)", got.AgentState)
+	}
+
+	// SetAgentState should now work on the migrated DB
+	now := time.Now()
+	if err := store2.SetAgentState(issue.ID, AgentStateDead, &now); err != nil {
+		t.Fatalf("SetAgentState() on migrated DB error = %v", err)
+	}
+	got, _ = store2.GetIssue(issue.ID)
+	if got.AgentState != AgentStateDead {
+		t.Errorf("AgentState = %q, want %q", got.AgentState, AgentStateDead)
 	}
 }
 

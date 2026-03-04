@@ -70,19 +70,48 @@ func (r Resolution) Valid() bool {
 	}
 }
 
+// AgentState represents the liveness state of an agent working on an issue.
+type AgentState string
+
+const (
+	// AgentStateIdle means no agent is actively running on this issue.
+	AgentStateIdle AgentState = "idle"
+	// AgentStateRunning means an agent is actively processing this issue.
+	AgentStateRunning AgentState = "running"
+	// AgentStateStuck means an agent has signaled it is blocked or making no progress.
+	AgentStateStuck AgentState = "stuck"
+	// AgentStateDone means the agent has finished its work on this issue.
+	AgentStateDone AgentState = "done"
+	// AgentStateDead means the agent process has died without completing cleanly.
+	AgentStateDead AgentState = "dead"
+)
+
+// Valid returns true if the agent state is a known valid state.
+// Empty string is valid (treated as unset / no agent state recorded).
+func (a AgentState) Valid() bool {
+	switch a {
+	case "", AgentStateIdle, AgentStateRunning, AgentStateStuck, AgentStateDone, AgentStateDead:
+		return true
+	default:
+		return false
+	}
+}
+
 // Issue represents a trackable work item with dependencies.
 type Issue struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description,omitempty"`
-	Status      Status     `json:"status"`
-	Priority    int        `json:"priority"` // 0-4 (P0 = critical, P4 = lowest)
-	Type        IssueType  `json:"issue_type"`
-	AssignedTo  string     `json:"assigned_to,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
-	Resolution  Resolution `json:"resolution,omitempty"`
+	ID           string     `json:"id"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description,omitempty"`
+	Status       Status     `json:"status"`
+	Priority     int        `json:"priority"` // 0-4 (P0 = critical, P4 = lowest)
+	Type         IssueType  `json:"issue_type"`
+	AssignedTo   string     `json:"assigned_to,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+	Resolution   Resolution `json:"resolution,omitempty"`
+	AgentState   AgentState `json:"agent_state,omitempty"`
+	LastActivity *time.Time `json:"last_activity,omitempty"`
 }
 
 // NewIssue creates a new issue with a hash-based ID and sensible defaults.

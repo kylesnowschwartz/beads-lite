@@ -81,7 +81,9 @@ func (s *Store) initSchema() error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		closed_at DATETIME,
-		resolution TEXT
+		resolution TEXT,
+		agent_state TEXT,
+		last_activity DATETIME
 	);
 
 	CREATE TABLE IF NOT EXISTS dependencies (
@@ -115,6 +117,11 @@ func (s *Store) migrateSchema() error {
 	s.db.Exec("UPDATE issues SET status = 'doing' WHERE status = 'in_progress'")
 	s.db.Exec("UPDATE issues SET status = 'done' WHERE status = 'closed'")
 
+	// Add agent state tracking columns. Errors are ignored because SQLite
+	// returns "duplicate column name" if the column already exists.
+	s.db.Exec("ALTER TABLE issues ADD COLUMN agent_state TEXT")
+	s.db.Exec("ALTER TABLE issues ADD COLUMN last_activity DATETIME")
+
 	return nil
 }
 
@@ -125,10 +132,11 @@ func (s *Store) CreateIssue(issue *Issue) error {
 	}
 
 	if _, err := s.db.Exec(`
-		INSERT INTO issues (id, title, description, status, priority, issue_type, assigned_to, created_at, updated_at, closed_at, resolution)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO issues (id, title, description, status, priority, issue_type, assigned_to, created_at, updated_at, closed_at, resolution, agent_state, last_activity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.Type,
-		nilIfEmpty(issue.AssignedTo), issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution); err != nil {
+		nilIfEmpty(issue.AssignedTo), issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution,
+		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity); err != nil {
 		return fmt.Errorf("insert issue: %w", err)
 	}
 	return nil
@@ -139,10 +147,12 @@ func (s *Store) GetIssue(id string) (*Issue, error) {
 	issue := &Issue{}
 	err := s.db.QueryRow(`
 		SELECT id, title, description, status, priority, issue_type,
-		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, '')
+		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
+		       COALESCE(agent_state, ''), last_activity
 		FROM issues WHERE id = ?`, id).Scan(
 		&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority,
-		&issue.Type, &issue.AssignedTo, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution)
+		&issue.Type, &issue.AssignedTo, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution,
+		&issue.AgentState, &issue.LastActivity)
 
 	if err == sql.ErrNoRows {
 		return nil, ErrIssueNotFound
@@ -159,10 +169,12 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 	issue.UpdatedAt = time.Now()
 	if _, err := s.db.Exec(`
 		UPDATE issues SET title = ?, description = ?, status = ?, priority = ?,
-		issue_type = ?, assigned_to = ?, updated_at = ?, closed_at = ?, resolution = ?
+		issue_type = ?, assigned_to = ?, updated_at = ?, closed_at = ?, resolution = ?,
+		agent_state = ?, last_activity = ?
 		WHERE id = ?`,
 		issue.Title, issue.Description, issue.Status, issue.Priority,
-		issue.Type, nilIfEmpty(issue.AssignedTo), issue.UpdatedAt, issue.ClosedAt, issue.Resolution, issue.ID); err != nil {
+		issue.Type, nilIfEmpty(issue.AssignedTo), issue.UpdatedAt, issue.ClosedAt, issue.Resolution,
+		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity, issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	return nil
@@ -183,7 +195,8 @@ func (s *Store) CloseIssue(id string, resolution Resolution) error {
 func (s *Store) ListIssues() ([]*Issue, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, description, status, priority, issue_type,
-		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, '')
+		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
+		       COALESCE(agent_state, ''), last_activity
 		FROM issues ORDER BY priority ASC, created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -246,7 +259,8 @@ func (s *Store) GetDependencies(issueID string) ([]*Dependency, error) {
 func (s *Store) GetReadyWork() ([]*Issue, error) {
 	query := `
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
-		       COALESCE(i.assigned_to, ''), i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, '')
+		       COALESCE(i.assigned_to, ''), i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, ''),
+		       COALESCE(i.agent_state, ''), i.last_activity
 		FROM issues i
 		WHERE i.status IN ('todo', 'doing', 'review')
 		AND i.id NOT IN (
@@ -274,7 +288,8 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 		issue := &Issue{}
 		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status,
 			&issue.Priority, &issue.Type, &issue.AssignedTo,
-			&issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution); err != nil {
+			&issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution,
+			&issue.AgentState, &issue.LastActivity); err != nil {
 			return nil, err
 		}
 		issues = append(issues, issue)
@@ -339,6 +354,47 @@ func nilIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+// nilIfEmptyAgentState returns nil for the zero AgentState value so SQLite
+// stores NULL rather than an empty string.
+func nilIfEmptyAgentState(a AgentState) interface{} {
+	if a == "" {
+		return nil
+	}
+	return string(a)
+}
+
+// SetAgentState updates the agent_state and last_activity for an issue.
+// activity may be nil to clear the timestamp; pass time.Now() for normal updates.
+func (s *Store) SetAgentState(issueID string, state AgentState, activity *time.Time) error {
+	if !state.Valid() {
+		return fmt.Errorf("invalid agent state: %q (valid: idle, running, stuck, done, dead)", state)
+	}
+	_, err := s.db.Exec(`
+		UPDATE issues SET agent_state = ?, last_activity = ?, updated_at = ?
+		WHERE id = ?`, nilIfEmptyAgentState(state), activity, time.Now(), issueID)
+	if err != nil {
+		return fmt.Errorf("set agent state: %w", err)
+	}
+	return nil
+}
+
+// GetAgentsByState returns all issues with the given agent_state.
+func (s *Store) GetAgentsByState(state AgentState) ([]*Issue, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, description, status, priority, issue_type,
+		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
+		       COALESCE(agent_state, ''), last_activity
+		FROM issues
+		WHERE agent_state = ?
+		ORDER BY priority ASC, created_at ASC`, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("get agents by state: %w", err)
+	}
+	defer rows.Close()
+
+	return scanIssues(rows)
 }
 
 // DeleteIssue removes an issue and all its dependencies from the database.
