@@ -125,6 +125,7 @@ Create Flags:
   --type <string>       Type (task, bug, feature, epic), default task
   --blocked-by <id>     Issue ID that blocks this (repeatable)
   --epic <id>           Parent epic (groups under epic without blocking)
+  --spec <text>         Add specification (repeatable, creates unchecked)
 
 Update Flags:
   --title <string>      New title
@@ -137,6 +138,10 @@ Update Flags:
   --unblock <id>        Remove blocker (repeatable)
   --epic <id>           Set parent epic (groups under epic without blocking)
   --remove-epic <id>    Remove parent epic link
+  --spec <text>         Add specification (repeatable, creates unchecked)
+  --check-spec <n>      Check specification by index (1-based, repeatable)
+  --uncheck-spec <n>    Uncheck specification by index (1-based, repeatable)
+  --remove-spec <n>     Remove specification by index (1-based, repeatable)
 
 Claim Flags:
   --agent <name>        Agent name (required)
@@ -198,6 +203,7 @@ func cmdCreate(args []string, w io.Writer) error {
 	issueType := fs.String("type", "task", "Type (task, bug, feature, epic)")
 	blockedBy := fs.StringSlice("blocked-by", nil, "Issue ID that blocks this (repeatable)")
 	epicID := fs.String("epic", "", "Parent epic ID (groups under epic without blocking)")
+	specs := fs.StringSlice("spec", nil, "Specification text (repeatable, creates unchecked)")
 	var sh priorityShorthands
 	addPriorityShorthands(fs, &sh)
 
@@ -223,7 +229,7 @@ func cmdCreate(args []string, w io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>] [--epic <id>]")
+		return errors.New("usage: bl create <title> [--description <text>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--blocked-by <id>] [--epic <id>] [--spec <text>]")
 	}
 
 	title := strings.Join(remaining, " ")
@@ -239,6 +245,9 @@ func cmdCreate(args []string, w io.Writer) error {
 	issue.Description = *description
 	issue.Priority = priority
 	issue.Type = IssueType(*issueType)
+	for _, text := range *specs {
+		issue.Specifications = append(issue.Specifications, Spec{Text: text})
+	}
 
 	if err := store.CreateIssue(issue); err != nil {
 		return fmt.Errorf("failed to create issue: %w", err)
@@ -603,6 +612,19 @@ func cmdShow(args []string, w io.Writer) error {
 		fmt.Fprintf(w, "LastActivity: %s\n", issue.LastActivity.Format("2006-01-02 15:04:05"))
 	}
 
+	// Show specifications
+	if len(issue.Specifications) > 0 {
+		checked, total := issue.SpecProgress()
+		fmt.Fprintf(w, "\nSpecifications (%d/%d):\n", checked, total)
+		for i, spec := range issue.Specifications {
+			mark := " "
+			if spec.Checked {
+				mark = "x"
+			}
+			fmt.Fprintf(w, "  %d. [%s] %s\n", i+1, mark, spec.Text)
+		}
+	}
+
 	// Show dependencies
 	deps, err := store.GetDependencies(id)
 	if err == nil && len(deps) > 0 {
@@ -618,7 +640,7 @@ func cmdShow(args []string, w io.Writer) error {
 // cmdUpdate modifies an existing issue
 func cmdUpdate(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bl update <id> [--title <text>] [--status <backlog|todo|doing|review|done>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--description <text>] [--blocked-by <id>] [--unblock <id>]")
+		return errors.New("usage: bl update <id> [--title <text>] [--status <backlog|todo|doing|review|done>] [--priority <0-4>] [--type <task|bug|feature|epic>] [--description <text>] [--blocked-by <id>] [--unblock <id>] [--force]")
 	}
 
 	id := args[0]
@@ -635,6 +657,11 @@ func cmdUpdate(args []string, w io.Writer) error {
 	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
 	epicID := fs.String("epic", "", "Set parent epic (groups under epic without blocking)")
 	removeEpic := fs.String("remove-epic", "", "Remove parent epic link")
+	addSpecs := fs.StringSlice("spec", nil, "Add specification (repeatable, creates unchecked)")
+	checkSpecs := fs.IntSlice("check-spec", nil, "Check specification by index (1-based, repeatable)")
+	uncheckSpecs := fs.IntSlice("uncheck-spec", nil, "Uncheck specification by index (1-based, repeatable)")
+	removeSpecs := fs.IntSlice("remove-spec", nil, "Remove specification by index (1-based, repeatable)")
+	force := fs.Bool("force", false, "Bypass transition gates (e.g. spec requirements)")
 	var sh priorityShorthands
 	addPriorityShorthands(fs, &sh)
 
@@ -685,6 +712,46 @@ func cmdUpdate(args []string, w io.Writer) error {
 	}
 	if fs.Changed("description") {
 		issue.Description = *description
+	}
+
+	// Spec mutations: remove first (highest index first to preserve positions),
+	// then toggle checks, then append new specs.
+	if len(*removeSpecs) > 0 {
+		// Sort descending so removals don't shift earlier indices.
+		indices := make([]int, len(*removeSpecs))
+		copy(indices, *removeSpecs)
+		sort.Sort(sort.Reverse(sort.IntSlice(indices)))
+		for _, idx := range indices {
+			i := idx - 1 // 1-based -> 0-based
+			if i < 0 || i >= len(issue.Specifications) {
+				return fmt.Errorf("spec index %d out of range (1-%d)", idx, len(issue.Specifications))
+			}
+			issue.Specifications = append(issue.Specifications[:i], issue.Specifications[i+1:]...)
+		}
+	}
+	for _, idx := range *checkSpecs {
+		i := idx - 1
+		if i < 0 || i >= len(issue.Specifications) {
+			return fmt.Errorf("spec index %d out of range (1-%d)", idx, len(issue.Specifications))
+		}
+		issue.Specifications[i].Checked = true
+	}
+	for _, idx := range *uncheckSpecs {
+		i := idx - 1
+		if i < 0 || i >= len(issue.Specifications) {
+			return fmt.Errorf("spec index %d out of range (1-%d)", idx, len(issue.Specifications))
+		}
+		issue.Specifications[i].Checked = false
+	}
+	for _, text := range *addSpecs {
+		issue.Specifications = append(issue.Specifications, Spec{Text: text})
+	}
+
+	if *status != "" && !*force {
+		policy := TransitionPolicy{RequireSpecsForReview: true}
+		if err := ValidateTransition(issue, issue.Status, policy); err != nil {
+			return fmt.Errorf("transition blocked: %w (use --force to override)", err)
+		}
 	}
 
 	if err := store.UpdateIssue(issue); err != nil {

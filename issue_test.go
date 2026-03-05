@@ -1,6 +1,7 @@
 package beadslite
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -318,4 +319,94 @@ func TestIssueValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateTransition(t *testing.T) {
+	policyOn := TransitionPolicy{RequireSpecsForReview: true}
+	policyOff := TransitionPolicy{RequireSpecsForReview: false}
+
+	tests := []struct {
+		name      string
+		issue     *Issue
+		newStatus Status
+		policy    TransitionPolicy
+		wantErr   bool
+	}{
+		{
+			name: "blocks review with unchecked specs",
+			issue: &Issue{
+				Specifications: []Spec{
+					{Text: "done", Checked: true},
+					{Text: "not done", Checked: false},
+				},
+			},
+			newStatus: StatusReview,
+			policy:    policyOn,
+			wantErr:   true,
+		},
+		{
+			name: "allows review when all checked",
+			issue: &Issue{
+				Specifications: []Spec{
+					{Text: "done", Checked: true},
+					{Text: "also done", Checked: true},
+				},
+			},
+			newStatus: StatusReview,
+			policy:    policyOn,
+			wantErr:   false,
+		},
+		{
+			name:      "allows review with no specs (vacuous truth)",
+			issue:     &Issue{},
+			newStatus: StatusReview,
+			policy:    policyOn,
+			wantErr:   false,
+		},
+		{
+			name: "allows review when policy disabled",
+			issue: &Issue{
+				Specifications: []Spec{
+					{Text: "not done", Checked: false},
+				},
+			},
+			newStatus: StatusReview,
+			policy:    policyOff,
+			wantErr:   false,
+		},
+		{
+			name: "allows non-review transitions regardless",
+			issue: &Issue{
+				Specifications: []Spec{
+					{Text: "not done", Checked: false},
+				},
+			},
+			newStatus: StatusDoing,
+			policy:    policyOn,
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTransition(tt.issue, tt.newStatus, tt.policy)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateTransition() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+
+	// Verify errors.Is works with ErrSpecsIncomplete
+	t.Run("errors.Is works with ErrSpecsIncomplete", func(t *testing.T) {
+		issue := &Issue{
+			Specifications: []Spec{{Text: "unchecked", Checked: false}},
+		}
+		err := ValidateTransition(issue, StatusReview, policyOn)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrSpecsIncomplete) {
+			t.Errorf("errors.Is(err, ErrSpecsIncomplete) = false, want true; err = %v", err)
+		}
+	})
 }

@@ -97,21 +97,69 @@ func (a AgentState) Valid() bool {
 	}
 }
 
+// Spec is a single checkable requirement on an issue.
+// Specifications are stored as a JSON array in the database — they travel
+// with the issue and have no independent identity or cross-issue queries.
+type Spec struct {
+	Text    string `json:"text"`
+	Checked bool   `json:"checked"`
+}
+
 // Issue represents a trackable work item with dependencies.
 type Issue struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description,omitempty"`
-	Status       Status     `json:"status"`
-	Priority     int        `json:"priority"` // 0-4 (P0 = critical, P4 = lowest)
-	Type         IssueType  `json:"issue_type"`
-	AssignedTo   string     `json:"assigned_to,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	ClosedAt     *time.Time `json:"closed_at,omitempty"`
-	Resolution   Resolution `json:"resolution,omitempty"`
-	AgentState   AgentState `json:"agent_state,omitempty"`
-	LastActivity *time.Time `json:"last_activity,omitempty"`
+	ID             string     `json:"id"`
+	Title          string     `json:"title"`
+	Description    string     `json:"description,omitempty"`
+	Status         Status     `json:"status"`
+	Priority       int        `json:"priority"` // 0-4 (P0 = critical, P4 = lowest)
+	Type           IssueType  `json:"issue_type"`
+	AssignedTo     string     `json:"assigned_to,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ClosedAt       *time.Time `json:"closed_at,omitempty"`
+	Resolution     Resolution `json:"resolution,omitempty"`
+	AgentState     AgentState `json:"agent_state,omitempty"`
+	LastActivity   *time.Time `json:"last_activity,omitempty"`
+	Specifications []Spec     `json:"specifications,omitempty"`
+}
+
+// SpecProgress returns the number of checked specs and total specs.
+// Returns (0, 0) when there are no specifications.
+func (i *Issue) SpecProgress() (checked, total int) {
+	total = len(i.Specifications)
+	for _, s := range i.Specifications {
+		if s.Checked {
+			checked++
+		}
+	}
+	return checked, total
+}
+
+// AllSpecsChecked returns true if every specification is checked,
+// or if there are no specifications at all.
+func (i *Issue) AllSpecsChecked() bool {
+	for _, s := range i.Specifications {
+		if !s.Checked {
+			return false
+		}
+	}
+	return true
+}
+
+var ErrSpecsIncomplete = errors.New("incomplete specifications")
+
+// TransitionPolicy controls which gates are enforced during status transitions.
+type TransitionPolicy struct {
+	RequireSpecsForReview bool
+}
+
+// ValidateTransition checks whether an issue can move to newStatus under the given policy.
+func ValidateTransition(issue *Issue, newStatus Status, policy TransitionPolicy) error {
+	if policy.RequireSpecsForReview && newStatus == StatusReview && !issue.AllSpecsChecked() {
+		checked, total := issue.SpecProgress()
+		return fmt.Errorf("%w: %d/%d checked, all required before review", ErrSpecsIncomplete, checked, total)
+	}
+	return nil
 }
 
 // NewIssue creates a new issue with a hash-based ID and sensible defaults.

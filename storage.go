@@ -2,6 +2,7 @@ package beadslite
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -121,7 +122,8 @@ func (s *Store) initSchema() error {
 		closed_at DATETIME,
 		resolution TEXT,
 		agent_state TEXT,
-		last_activity DATETIME
+		last_activity DATETIME,
+		specifications TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS dependencies (
@@ -159,6 +161,7 @@ func (s *Store) migrateSchema() error {
 	// returns "duplicate column name" if the column already exists.
 	s.db.Exec("ALTER TABLE issues ADD COLUMN agent_state TEXT")
 	s.db.Exec("ALTER TABLE issues ADD COLUMN last_activity DATETIME")
+	s.db.Exec("ALTER TABLE issues ADD COLUMN specifications TEXT")
 
 	return nil
 }
@@ -170,11 +173,11 @@ func (s *Store) CreateIssue(issue *Issue) error {
 	}
 
 	if _, err := s.db.Exec(`
-		INSERT INTO issues (id, title, description, status, priority, issue_type, assigned_to, created_at, updated_at, closed_at, resolution, agent_state, last_activity)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO issues (id, title, description, status, priority, issue_type, assigned_to, created_at, updated_at, closed_at, resolution, agent_state, last_activity, specifications)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.Type,
 		nilIfEmpty(issue.AssignedTo), issue.CreatedAt, issue.UpdatedAt, issue.ClosedAt, issue.Resolution,
-		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity); err != nil {
+		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity, specsToJSON(issue.Specifications)); err != nil {
 		return fmt.Errorf("insert issue: %w", err)
 	}
 	return nil
@@ -183,18 +186,20 @@ func (s *Store) CreateIssue(issue *Issue) error {
 // GetIssue retrieves an issue by ID.
 func (s *Store) GetIssue(id string) (*Issue, error) {
 	issue := &Issue{}
+	var specsJSON string
 	err := s.db.QueryRow(`
 		SELECT id, title, description, status, priority, issue_type,
 		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
-		       COALESCE(agent_state, ''), last_activity
+		       COALESCE(agent_state, ''), last_activity, COALESCE(specifications, '')
 		FROM issues WHERE id = ?`, id).Scan(
 		&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority,
 		&issue.Type, &issue.AssignedTo, &issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution,
-		&issue.AgentState, &issue.LastActivity)
+		&issue.AgentState, &issue.LastActivity, &specsJSON)
 
 	if err == sql.ErrNoRows {
 		return nil, ErrIssueNotFound
 	}
+	issue.Specifications = specsFromJSON(specsJSON)
 	return issue, err
 }
 
@@ -208,11 +213,11 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 	if _, err := s.db.Exec(`
 		UPDATE issues SET title = ?, description = ?, status = ?, priority = ?,
 		issue_type = ?, assigned_to = ?, updated_at = ?, closed_at = ?, resolution = ?,
-		agent_state = ?, last_activity = ?
+		agent_state = ?, last_activity = ?, specifications = ?
 		WHERE id = ?`,
 		issue.Title, issue.Description, issue.Status, issue.Priority,
 		issue.Type, nilIfEmpty(issue.AssignedTo), issue.UpdatedAt, issue.ClosedAt, issue.Resolution,
-		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity, issue.ID); err != nil {
+		nilIfEmptyAgentState(issue.AgentState), issue.LastActivity, specsToJSON(issue.Specifications), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	return nil
@@ -234,7 +239,7 @@ func (s *Store) ListIssues() ([]*Issue, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, description, status, priority, issue_type,
 		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
-		       COALESCE(agent_state, ''), last_activity
+		       COALESCE(agent_state, ''), last_activity, COALESCE(specifications, '')
 		FROM issues ORDER BY priority ASC, created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -298,7 +303,7 @@ func (s *Store) GetReadyWork() ([]*Issue, error) {
 	query := `
 		SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type,
 		       COALESCE(i.assigned_to, ''), i.created_at, i.updated_at, i.closed_at, COALESCE(i.resolution, ''),
-		       COALESCE(i.agent_state, ''), i.last_activity
+		       COALESCE(i.agent_state, ''), i.last_activity, COALESCE(i.specifications, '')
 		FROM issues i
 		WHERE i.status IN ('todo', 'doing', 'review')
 		AND i.id NOT IN (
@@ -324,12 +329,14 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 	var issues []*Issue
 	for rows.Next() {
 		issue := &Issue{}
+		var specsJSON string
 		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status,
 			&issue.Priority, &issue.Type, &issue.AssignedTo,
 			&issue.CreatedAt, &issue.UpdatedAt, &issue.ClosedAt, &issue.Resolution,
-			&issue.AgentState, &issue.LastActivity); err != nil {
+			&issue.AgentState, &issue.LastActivity, &specsJSON); err != nil {
 			return nil, err
 		}
+		issue.Specifications = specsFromJSON(specsJSON)
 		issues = append(issues, issue)
 	}
 	return issues, rows.Err()
@@ -387,7 +394,7 @@ func (s *Store) UnclaimIssue(id string) error {
 
 // nilIfEmpty returns nil for empty strings, allowing SQLite to store NULL
 // instead of empty string. This keeps assigned_to semantically clean.
-func nilIfEmpty(s string) interface{} {
+func nilIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}
@@ -396,11 +403,37 @@ func nilIfEmpty(s string) interface{} {
 
 // nilIfEmptyAgentState returns nil for the zero AgentState value so SQLite
 // stores NULL rather than an empty string.
-func nilIfEmptyAgentState(a AgentState) interface{} {
+func nilIfEmptyAgentState(a AgentState) any {
 	if a == "" {
 		return nil
 	}
 	return string(a)
+}
+
+// specsToJSON marshals specs to a JSON string for storage.
+// Returns nil (SQL NULL) when the slice is empty, keeping the column clean.
+func specsToJSON(specs []Spec) any {
+	if len(specs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(specs)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+// specsFromJSON unmarshals a JSON string into a Spec slice.
+// Returns nil for empty/null input — callers never see an error.
+func specsFromJSON(s string) []Spec {
+	if s == "" {
+		return nil
+	}
+	var specs []Spec
+	if err := json.Unmarshal([]byte(s), &specs); err != nil {
+		return nil
+	}
+	return specs
 }
 
 // SetAgentState updates the agent_state and last_activity for an issue.
@@ -423,7 +456,7 @@ func (s *Store) GetAgentsByState(state AgentState) ([]*Issue, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, description, status, priority, issue_type,
 		       COALESCE(assigned_to, ''), created_at, updated_at, closed_at, COALESCE(resolution, ''),
-		       COALESCE(agent_state, ''), last_activity
+		       COALESCE(agent_state, ''), last_activity, COALESCE(specifications, '')
 		FROM issues
 		WHERE agent_state = ?
 		ORDER BY priority ASC, created_at ASC`, string(state))

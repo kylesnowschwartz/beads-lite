@@ -2780,3 +2780,54 @@ func TestCLI_ListJSON_IncludesAgentState(t *testing.T) {
 		t.Errorf("expected last_activity in JSON output, got: %s", out)
 	}
 }
+
+func TestCLI_Update_SpecGate_BlocksReview(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Gated Task"})
+	id := extractID(createOut)
+
+	// Add specs but don't check them
+	runCLI([]string{"update", id, "--spec", "Write tests", "--spec", "Update docs"})
+
+	// Transition to review should be blocked
+	_, err := runCLI([]string{"update", id, "--status", "review"})
+	if err == nil {
+		t.Fatal("expected transition to review to be blocked with unchecked specs")
+	}
+	if !strings.Contains(err.Error(), "transition blocked") {
+		t.Errorf("expected 'transition blocked' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "incomplete specifications") {
+		t.Errorf("expected 'incomplete specifications' in error, got: %v", err)
+	}
+}
+
+func TestCLI_Update_SpecGate_ForceOverride(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "Forced Task"})
+	id := extractID(createOut)
+
+	// Add unchecked specs
+	runCLI([]string{"update", id, "--spec", "Write tests"})
+
+	// Force should bypass the gate
+	_, err := runCLI([]string{"update", id, "--status", "review", "--force"})
+	if err != nil {
+		t.Fatalf("--force should bypass spec gate: %v", err)
+	}
+}
+
+func TestCLI_Update_SpecGate_NoSpecsAllowed(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+	createOut, _ := runCLI([]string{"create", "No Spec Task"})
+	id := extractID(createOut)
+
+	// No specs at all — review should be allowed (vacuous truth)
+	_, err := runCLI([]string{"update", id, "--status", "review"})
+	if err != nil {
+		t.Fatalf("review with no specs should succeed: %v", err)
+	}
+}

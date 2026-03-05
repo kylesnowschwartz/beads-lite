@@ -14,20 +14,21 @@ import (
 // IssueExport represents an issue with embedded dependencies for JSONL export.
 // Uses a flat dependency structure for git-friendly diffs.
 type IssueExport struct {
-	ID           string             `json:"id"`
-	Title        string             `json:"title"`
-	Description  string             `json:"description,omitempty"`
-	Status       Status             `json:"status"`
-	Priority     int                `json:"priority"`
-	Type         IssueType          `json:"issue_type"`
-	AssignedTo   string             `json:"assigned_to,omitempty"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-	ClosedAt     *time.Time         `json:"closed_at,omitempty"`
-	Resolution   Resolution         `json:"resolution,omitempty"`
-	AgentState   AgentState         `json:"agent_state,omitempty"`
-	LastActivity *time.Time         `json:"last_activity,omitempty"`
-	Dependencies []DependencyExport `json:"dependencies"`
+	ID             string             `json:"id"`
+	Title          string             `json:"title"`
+	Description    string             `json:"description,omitempty"`
+	Status         Status             `json:"status"`
+	Priority       int                `json:"priority"`
+	Type           IssueType          `json:"issue_type"`
+	AssignedTo     string             `json:"assigned_to,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	ClosedAt       *time.Time         `json:"closed_at,omitempty"`
+	Resolution     Resolution         `json:"resolution,omitempty"`
+	AgentState     AgentState         `json:"agent_state,omitempty"`
+	LastActivity   *time.Time         `json:"last_activity,omitempty"`
+	Specifications []Spec             `json:"specifications,omitempty"`
+	Dependencies   []DependencyExport `json:"dependencies"`
 }
 
 // DependencyExport represents a dependency relationship for JSONL export.
@@ -45,20 +46,21 @@ type ImportStats struct {
 // toIssueExport converts an Issue and its dependencies to an IssueExport.
 func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
 	export := IssueExport{
-		ID:           issue.ID,
-		Title:        issue.Title,
-		Description:  issue.Description,
-		Status:       issue.Status,
-		Priority:     issue.Priority,
-		Type:         issue.Type,
-		AssignedTo:   issue.AssignedTo,
-		CreatedAt:    issue.CreatedAt,
-		UpdatedAt:    issue.UpdatedAt,
-		ClosedAt:     issue.ClosedAt,
-		Resolution:   issue.Resolution,
-		AgentState:   issue.AgentState,
-		LastActivity: issue.LastActivity,
-		Dependencies: make([]DependencyExport, len(deps)),
+		ID:             issue.ID,
+		Title:          issue.Title,
+		Description:    issue.Description,
+		Status:         issue.Status,
+		Priority:       issue.Priority,
+		Type:           issue.Type,
+		AssignedTo:     issue.AssignedTo,
+		CreatedAt:      issue.CreatedAt,
+		UpdatedAt:      issue.UpdatedAt,
+		ClosedAt:       issue.ClosedAt,
+		Resolution:     issue.Resolution,
+		AgentState:     issue.AgentState,
+		LastActivity:   issue.LastActivity,
+		Specifications: issue.Specifications,
+		Dependencies:   make([]DependencyExport, len(deps)),
 	}
 	for i, dep := range deps {
 		export.Dependencies[i] = DependencyExport{
@@ -167,19 +169,20 @@ func ImportFromJSONL(store *Store, r io.Reader) (*ImportStats, error) {
 			}
 
 			issue := &Issue{
-				ID:           export.ID,
-				Title:        export.Title,
-				Description:  export.Description,
-				Status:       export.Status,
-				Priority:     export.Priority,
-				Type:         export.Type,
-				AssignedTo:   export.AssignedTo,
-				CreatedAt:    export.CreatedAt,
-				UpdatedAt:    export.UpdatedAt,
-				ClosedAt:     export.ClosedAt,
-				Resolution:   export.Resolution,
-				AgentState:   export.AgentState,
-				LastActivity: export.LastActivity,
+				ID:             export.ID,
+				Title:          export.Title,
+				Description:    export.Description,
+				Status:         export.Status,
+				Priority:       export.Priority,
+				Type:           export.Type,
+				AssignedTo:     export.AssignedTo,
+				CreatedAt:      export.CreatedAt,
+				UpdatedAt:      export.UpdatedAt,
+				ClosedAt:       export.ClosedAt,
+				Resolution:     export.Resolution,
+				AgentState:     export.AgentState,
+				LastActivity:   export.LastActivity,
+				Specifications: export.Specifications,
 			}
 
 			if existing != nil {
