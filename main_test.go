@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -2829,5 +2830,28 @@ func TestCLI_Update_SpecGate_NoSpecsAllowed(t *testing.T) {
 	_, err := runCLI([]string{"update", id, "--status", "review"})
 	if err != nil {
 		t.Fatalf("review with no specs should succeed: %v", err)
+	}
+}
+
+func TestCLI_Update_SpecGate_ConfigDisabled(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	// Disable the spec gate via config
+	configPath := filepath.Join(".beads-lite", "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"require_specs_for_review": false}`), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	createOut, _ := runCLI([]string{"create", "Config Disabled Task"})
+	id := extractID(createOut)
+
+	// Add unchecked specs
+	runCLI([]string{"update", id, "--spec", "Write tests"})
+
+	// Review should succeed without --force because config disables the gate
+	_, err := runCLI([]string{"update", id, "--status", "review"})
+	if err != nil {
+		t.Fatalf("review should succeed when config disables spec gate: %v", err)
 	}
 }

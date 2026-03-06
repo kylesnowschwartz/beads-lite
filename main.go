@@ -164,6 +164,17 @@ func getDBPath() string {
 	return filepath.Join(beadsDir, dbName)
 }
 
+// writeDefaultBLConfig writes the default beads-lite config file.
+func writeDefaultBLConfig(path string) error {
+	cfg := Config{RequireSpecsForReview: func() *bool { v := true; return &v }()}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0644)
+}
+
 func openStore() (*Store, error) {
 	dbPath := getDBPath()
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -187,6 +198,15 @@ func cmdInit(w io.Writer) error {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 	defer store.Close()
+
+	// Write default config if absent. Existing config is preserved so
+	// re-running init doesn't reset user settings.
+	configPath := filepath.Join(dir, "config.json")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := writeDefaultBLConfig(configPath); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+	}
 
 	fmt.Fprintln(w, "Initialized beads-lite in", beadsDir)
 	fmt.Fprintln(w)
@@ -747,9 +767,11 @@ func cmdUpdate(args []string, w io.Writer) error {
 		issue.Specifications = append(issue.Specifications, Spec{Text: text})
 	}
 
+	// Read spec-gate config from .beads-lite/config.json (defaults to true).
+	// --force is the one-time escape hatch.
 	if *status != "" && !*force {
-		policy := TransitionPolicy{RequireSpecsForReview: true}
-		if err := ValidateTransition(issue, issue.Status, policy); err != nil {
+		cfg := LoadConfig(os.Getenv("BL_ROOT"))
+		if err := ValidateTransition(issue, issue.Status, cfg.TransitionPolicy()); err != nil {
 			return fmt.Errorf("transition blocked: %w (use --force to override)", err)
 		}
 	}
