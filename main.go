@@ -223,7 +223,7 @@ func cmdCreate(args []string, w io.Writer) error {
 	issueType := fs.String("type", "task", "Type (task, bug, feature, epic)")
 	blockedBy := fs.StringSlice("blocked-by", nil, "Issue ID that blocks this (repeatable)")
 	epicID := fs.String("epic", "", "Parent epic ID (groups under epic without blocking)")
-	specs := fs.StringSlice("spec", nil, "Specification text (repeatable, creates unchecked)")
+	specs := fs.StringArray("spec", nil, "Specification text (repeatable, creates unchecked)")
 	var sh priorityShorthands
 	addPriorityShorthands(fs, &sh)
 
@@ -677,7 +677,7 @@ func cmdUpdate(args []string, w io.Writer) error {
 	rmBlockers := fs.StringSlice("unblock", nil, "Remove blocker (repeatable)")
 	epicID := fs.String("epic", "", "Set parent epic (groups under epic without blocking)")
 	removeEpic := fs.String("remove-epic", "", "Remove parent epic link")
-	addSpecs := fs.StringSlice("spec", nil, "Add specification (repeatable, creates unchecked)")
+	addSpecs := fs.StringArray("spec", nil, "Add specification (repeatable, creates unchecked)")
 	checkSpecs := fs.IntSlice("check-spec", nil, "Check specification by index (1-based, repeatable)")
 	uncheckSpecs := fs.IntSlice("uncheck-spec", nil, "Uncheck specification by index (1-based, repeatable)")
 	removeSpecs := fs.IntSlice("remove-spec", nil, "Remove specification by index (1-based, repeatable)")
