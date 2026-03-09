@@ -2855,3 +2855,54 @@ func TestCLI_Update_SpecGate_ConfigDisabled(t *testing.T) {
 		t.Fatalf("review should succeed when config disables spec gate: %v", err)
 	}
 }
+
+func TestCLI_Create_SpecWithCommas(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	spec := "When the image is built, claude runs successfully"
+	createOut, err := runCLI([]string{"create", "Comma Test", "--spec", spec})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	id := extractID(createOut)
+
+	showOut, err := runCLI([]string{"show", id})
+	if err != nil {
+		t.Fatalf("show failed: %v", err)
+	}
+
+	// Should be one spec, not split on the comma
+	if !strings.Contains(showOut, "Specifications (0/1):") {
+		t.Errorf("expected 1 spec, got:\n%s", showOut)
+	}
+	if !strings.Contains(showOut, spec) {
+		t.Errorf("expected spec text %q in output, got:\n%s", spec, showOut)
+	}
+}
+
+func TestCLI_Update_SpecWithCommas(t *testing.T) {
+	setupTestDir(t)
+	runCLI([]string{"init"})
+
+	createOut, _ := runCLI([]string{"create", "Update Comma Test"})
+	id := extractID(createOut)
+
+	spec := "If condition A, then system shall do B, and also C"
+	_, err := runCLI([]string{"update", id, "--spec", spec})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	showOut, err := runCLI([]string{"show", id})
+	if err != nil {
+		t.Fatalf("show failed: %v", err)
+	}
+
+	if !strings.Contains(showOut, "Specifications (0/1):") {
+		t.Errorf("expected 1 spec, got:\n%s", showOut)
+	}
+	if !strings.Contains(showOut, spec) {
+		t.Errorf("expected spec text %q in output, got:\n%s", spec, showOut)
+	}
+}
