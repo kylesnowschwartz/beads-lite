@@ -881,11 +881,15 @@ func cmdClose(args []string, w io.Writer) error {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
-	if err := store.CloseIssue(id, resolution); err != nil {
+	result, err := store.CloseIssue(id, resolution)
+	if err != nil {
 		return fmt.Errorf("failed to close: %w", err)
 	}
 
 	fmt.Fprintf(w, "Closed %s: %s\n", id, issue.Title)
+	if result != nil {
+		fmt.Fprintf(w, "Auto-closed epic %s: %q (all children done)\n", result.ID, result.Title)
+	}
 	return nil
 }
 

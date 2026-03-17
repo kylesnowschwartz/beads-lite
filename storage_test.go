@@ -100,7 +100,7 @@ func TestStoreCloseIssue(t *testing.T) {
 	issue := NewIssue("Task to close")
 	store.CreateIssue(issue)
 
-	err := store.CloseIssue(issue.ID, ResolutionDone)
+	_, err := store.CloseIssue(issue.ID, ResolutionDone)
 	if err != nil {
 		t.Fatalf("CloseIssue() error = %v", err)
 	}
@@ -767,6 +767,198 @@ func TestStoreAgentStateBackwardCompatibility(t *testing.T) {
 	got, _ = store2.GetIssue(issue.ID)
 	if got.AgentState != AgentStateDead {
 		t.Errorf("AgentState = %q, want %q", got.AgentState, AgentStateDead)
+	}
+}
+
+func TestCloseIssue_AutoClosesParentEpic(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Create epic with two children linked via DepParent
+	epic := NewIssue("Auth feature")
+	epic.Type = IssueTypeEpic
+	store.CreateIssue(epic)
+
+	child1 := NewIssue("Add login endpoint")
+	child1.Status = StatusTodo
+	store.CreateIssue(child1)
+	store.AddDependency(child1.ID, epic.ID, DepParent)
+
+	child2 := NewIssue("Add logout endpoint")
+	child2.Status = StatusTodo
+	store.CreateIssue(child2)
+	store.AddDependency(child2.ID, epic.ID, DepParent)
+
+	// Close first child — epic should stay open
+	store.CloseIssue(child1.ID, ResolutionDone)
+
+	// Close last child — epic should auto-close
+	result, err := store.CloseIssue(child2.ID, ResolutionDone)
+	if err != nil {
+		t.Fatalf("CloseIssue() error = %v", err)
+	}
+
+	// Verify auto-close result was returned
+	if result == nil {
+		t.Fatal("expected AutoCloseResult, got nil")
+	}
+	if result.ID != epic.ID {
+		t.Errorf("AutoCloseResult.ID = %q, want %q", result.ID, epic.ID)
+	}
+	if result.Title != epic.Title {
+		t.Errorf("AutoCloseResult.Title = %q, want %q", result.Title, epic.Title)
+	}
+
+	// Verify epic is done
+	got, _ := store.GetIssue(epic.ID)
+	if got.Status != StatusDone {
+		t.Errorf("epic status = %q, want %q", got.Status, StatusDone)
+	}
+	if got.Resolution != ResolutionDone {
+		t.Errorf("epic resolution = %q, want %q", got.Resolution, ResolutionDone)
+	}
+}
+
+func TestCloseIssue_NoAutoCloseWithOpenChildren(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	epic := NewIssue("Multi-child epic")
+	epic.Type = IssueTypeEpic
+	store.CreateIssue(epic)
+
+	child1 := NewIssue("Done child")
+	child1.Status = StatusTodo
+	store.CreateIssue(child1)
+	store.AddDependency(child1.ID, epic.ID, DepParent)
+
+	child2 := NewIssue("Still open child")
+	child2.Status = StatusTodo
+	store.CreateIssue(child2)
+	store.AddDependency(child2.ID, epic.ID, DepParent)
+
+	// Close one child while sibling remains open
+	result, err := store.CloseIssue(child1.ID, ResolutionDone)
+	if err != nil {
+		t.Fatalf("CloseIssue() error = %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected no auto-close, got %+v", result)
+	}
+
+	// Epic should still be open
+	got, _ := store.GetIssue(epic.ID)
+	if got.Status == StatusDone {
+		t.Error("epic should not be closed while children remain open")
+	}
+}
+
+func TestCloseIssue_NoCascadePastParent(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Grandparent epic A -> child epic B -> grandchild task C
+	epicA := NewIssue("Grandparent epic")
+	epicA.Type = IssueTypeEpic
+	store.CreateIssue(epicA)
+
+	epicB := NewIssue("Child epic")
+	epicB.Type = IssueTypeEpic
+	epicB.Status = StatusTodo
+	store.CreateIssue(epicB)
+	store.AddDependency(epicB.ID, epicA.ID, DepParent)
+
+	taskC := NewIssue("Grandchild task")
+	taskC.Status = StatusTodo
+	store.CreateIssue(taskC)
+	store.AddDependency(taskC.ID, epicB.ID, DepParent)
+
+	// Close the grandchild — should auto-close epicB but NOT epicA
+	result, err := store.CloseIssue(taskC.ID, ResolutionDone)
+	if err != nil {
+		t.Fatalf("CloseIssue() error = %v", err)
+	}
+
+	// epicB should have been auto-closed
+	if result == nil {
+		t.Fatal("expected epicB to auto-close")
+	}
+	if result.ID != epicB.ID {
+		t.Errorf("auto-closed ID = %q, want %q", result.ID, epicB.ID)
+	}
+
+	gotB, _ := store.GetIssue(epicB.ID)
+	if gotB.Status != StatusDone {
+		t.Errorf("epicB status = %q, want %q", gotB.Status, StatusDone)
+	}
+
+	// epicA should still be open (no cascade)
+	gotA, _ := store.GetIssue(epicA.ID)
+	if gotA.Status == StatusDone {
+		t.Error("epicA should NOT be auto-closed (no cascade past parent)")
+	}
+}
+
+func TestCloseIssue_WontfixTriggersParentCheck(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	epic := NewIssue("Feature epic")
+	epic.Type = IssueTypeEpic
+	store.CreateIssue(epic)
+
+	child1 := NewIssue("Completed child")
+	child1.Status = StatusTodo
+	store.CreateIssue(child1)
+	store.AddDependency(child1.ID, epic.ID, DepParent)
+
+	child2 := NewIssue("Rejected child")
+	child2.Status = StatusTodo
+	store.CreateIssue(child2)
+	store.AddDependency(child2.ID, epic.ID, DepParent)
+
+	// Close first child normally
+	store.CloseIssue(child1.ID, ResolutionDone)
+
+	// Close second child as wontfix — parent should still auto-close with resolution "done"
+	result, err := store.CloseIssue(child2.ID, ResolutionWontfix)
+	if err != nil {
+		t.Fatalf("CloseIssue() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected auto-close after wontfix")
+	}
+
+	got, _ := store.GetIssue(epic.ID)
+	if got.Status != StatusDone {
+		t.Errorf("epic status = %q, want %q", got.Status, StatusDone)
+	}
+	if got.Resolution != ResolutionDone {
+		t.Errorf("epic resolution = %q, want %q (parent always closes as done)", got.Resolution, ResolutionDone)
+	}
+}
+
+func TestCloseIssue_NoParentDependency(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	task := NewIssue("Standalone task")
+	task.Status = StatusTodo
+	store.CreateIssue(task)
+
+	// Close a task with no parent link
+	result, err := store.CloseIssue(task.ID, ResolutionDone)
+	if err != nil {
+		t.Fatalf("CloseIssue() error = %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected no auto-close for parentless task, got %+v", result)
+	}
+
+	// Task should be closed
+	got, _ := store.GetIssue(task.ID)
+	if got.Status != StatusDone {
+		t.Errorf("status = %q, want %q", got.Status, StatusDone)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
@@ -13,6 +14,13 @@ import (
 
 // ErrIssueNotFound is returned when an issue does not exist in the database.
 var ErrIssueNotFound = errors.New("issue not found")
+
+// AutoCloseResult reports that a parent epic was automatically closed
+// because all of its children reached status done.
+type AutoCloseResult struct {
+	ID    string
+	Title string
+}
 
 // Storage is the interface that wraps all persistence operations for issues and dependencies.
 // *Store is the concrete SQLite implementation; callers that only need the interface
@@ -30,7 +38,7 @@ type Storage interface {
 	DeleteIssue(id string) error
 
 	// Issue workflow
-	CloseIssue(id string, resolution Resolution) error
+	CloseIssue(id string, resolution Resolution) (*AutoCloseResult, error)
 	ClaimIssue(id, agent string) (bool, error)
 	UnclaimIssue(id string) error
 
@@ -224,14 +232,70 @@ func (s *Store) UpdateIssue(issue *Issue) error {
 }
 
 // CloseIssue marks an issue as closed with the given resolution.
-func (s *Store) CloseIssue(id string, resolution Resolution) error {
+// After closing, it checks whether the issue has a parent epic whose children
+// are now all done. If so, it auto-closes the parent with resolution "done" and
+// returns an AutoCloseResult. Auto-close does not cascade to grandparents.
+func (s *Store) CloseIssue(id string, resolution Resolution) (*AutoCloseResult, error) {
 	now := time.Now()
 	if _, err := s.db.Exec(`
 		UPDATE issues SET status = ?, assigned_to = NULL, updated_at = ?, closed_at = ?, resolution = ?
 		WHERE id = ?`, StatusDone, now, now, resolution, id); err != nil {
-		return fmt.Errorf("close issue: %w", err)
+		return nil, fmt.Errorf("close issue: %w", err)
 	}
-	return nil
+
+	result, err := s.tryAutoCloseParent(id, now)
+	if err != nil {
+		// Best-effort: log and continue (spec 6)
+		fmt.Fprintf(os.Stderr, "auto-close check failed: %v\n", err)
+		return nil, nil
+	}
+	return result, nil
+}
+
+// tryAutoCloseParent checks whether the closed issue's parent epic should be
+// auto-closed. Returns nil if there's no parent or open children remain.
+func (s *Store) tryAutoCloseParent(childID string, now time.Time) (*AutoCloseResult, error) {
+	// Find this issue's parent epic via DepParent dependency
+	var parentID string
+	err := s.db.QueryRow(`
+		SELECT depends_on_id FROM dependencies
+		WHERE issue_id = ? AND type = ?`, childID, DepParent).Scan(&parentID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // no parent, nothing to do
+		}
+		return nil, fmt.Errorf("find parent: %w", err)
+	}
+
+	// Count children of the parent that are not yet done
+	var openCount int
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM dependencies d
+		JOIN issues i ON d.issue_id = i.id
+		WHERE d.depends_on_id = ? AND d.type = ? AND i.status != ?`,
+		parentID, DepParent, StatusDone).Scan(&openCount)
+	if err != nil {
+		return nil, fmt.Errorf("count open children: %w", err)
+	}
+
+	if openCount > 0 {
+		return nil, nil
+	}
+
+	// All children done — close the parent epic
+	var title string
+	err = s.db.QueryRow(`SELECT title FROM issues WHERE id = ?`, parentID).Scan(&title)
+	if err != nil {
+		return nil, fmt.Errorf("get parent title: %w", err)
+	}
+
+	if _, err := s.db.Exec(`
+		UPDATE issues SET status = ?, assigned_to = NULL, updated_at = ?, closed_at = ?, resolution = ?
+		WHERE id = ?`, StatusDone, now, now, ResolutionDone, parentID); err != nil {
+		return nil, fmt.Errorf("auto-close parent: %w", err)
+	}
+
+	return &AutoCloseResult{ID: parentID, Title: title}, nil
 }
 
 // ListIssues returns all issues.
