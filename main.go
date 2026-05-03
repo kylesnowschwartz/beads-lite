@@ -893,21 +893,29 @@ func cmdClose(args []string, w io.Writer) error {
 	return nil
 }
 
-// cmdClaim atomically claims an issue for an agent.
+// cmdClaim atomically claims an issue for an agent in a given role.
+// Defaults to --role worker for backward compatibility. Worker claims also
+// move the issue to status='doing' and set assigned_to (legacy mirroring);
+// reviewer and oracle claims only register in the assignments table.
 func cmdClaim(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("claim", flag.ContinueOnError)
 	fs.SetOutput(w)
 	agent := fs.String("agent", "", "Agent name (required)")
+	roleFlag := fs.String("role", string(RoleWorker), "Role (worker, reviewer, oracle)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if fs.NArg() == 0 {
-		return errors.New("usage: bl claim <id> --agent <name>")
+		return errors.New("usage: bl claim <id> --agent <name> [--role worker|reviewer|oracle]")
 	}
 	if *agent == "" {
 		return errors.New("--agent is required")
+	}
+	role := Role(*roleFlag)
+	if !role.Valid() {
+		return fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", *roleFlag)
 	}
 
 	id := fs.Arg(0)
@@ -924,25 +932,67 @@ func cmdClaim(args []string, w io.Writer) error {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
-	claimed, err := store.ClaimIssue(id, *agent)
+	var claimed bool
+	if role == RoleWorker {
+		claimed, err = store.ClaimIssue(id, *agent)
+	} else {
+		claimed, err = store.ClaimRole(id, role, *agent)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to claim: %w", err)
 	}
 	if !claimed {
-		return fmt.Errorf("already claimed by %s", issue.AssignedTo)
+		// Try to surface who is holding the slot for a clearer message.
+		holder := assignmentHolder(issue, role)
+		if holder != "" {
+			return fmt.Errorf("%s slot already claimed by %s", role, holder)
+		}
+		return fmt.Errorf("%s slot already claimed", role)
 	}
 
-	fmt.Fprintf(w, "Claimed %s for %s: %s\n", id, *agent, issue.Title)
+	fmt.Fprintf(w, "Claimed %s [role=%s] for %s: %s\n", id, role, *agent, issue.Title)
 	return nil
 }
 
-// cmdUnclaim releases a claimed issue.
+// assignmentHolder returns the agent currently holding the given role on an
+// issue, or empty if no live holder exists. Used for clearer error messages
+// from cmdClaim when the atomic insert is rejected.
+func assignmentHolder(issue *Issue, role Role) string {
+	if issue == nil {
+		return ""
+	}
+	for _, a := range issue.Assignments {
+		if a.Role == role && (a.State == AgentStateRunning || a.State == AgentStateStuck) {
+			return a.Agent
+		}
+	}
+	if role == RoleWorker {
+		return issue.AssignedTo
+	}
+	return ""
+}
+
+// cmdUnclaim releases a claimed issue. Defaults to --role worker, which also
+// resets the legacy status/assigned_to fields. Other roles only delete the
+// assignment row.
 func cmdUnclaim(args []string, w io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: bl unclaim <id>")
+	fs := flag.NewFlagSet("unclaim", flag.ContinueOnError)
+	fs.SetOutput(w)
+	roleFlag := fs.String("role", string(RoleWorker), "Role (worker, reviewer, oracle)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
 
-	id := args[0]
+	if fs.NArg() == 0 {
+		return errors.New("usage: bl unclaim <id> [--role worker|reviewer|oracle]")
+	}
+	role := Role(*roleFlag)
+	if !role.Valid() {
+		return fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", *roleFlag)
+	}
+
+	id := fs.Arg(0)
 
 	store, err := openStore()
 	if err != nil {
@@ -955,34 +1005,41 @@ func cmdUnclaim(args []string, w io.Writer) error {
 		return fmt.Errorf("issue %s: %w", id, err)
 	}
 
-	if err := store.UnclaimIssue(id); err != nil {
+	if err := store.UnclaimRole(id, role); err != nil {
 		return fmt.Errorf("failed to unclaim: %w", err)
 	}
 
-	fmt.Fprintf(w, "Unclaimed %s: %s\n", id, issue.Title)
+	fmt.Fprintf(w, "Unclaimed %s [role=%s]: %s\n", id, role, issue.Title)
 	return nil
 }
 
 // cmdAgentState sets or queries the agent_state field on an issue.
-// Without --list, it updates the state of a single issue.
-// With --list, it lists all issues in the given state (no id required).
+// Without --list, it updates the state of a single (issue, role) assignment.
+// With --list, it lists all issues whose worker-role state matches --state.
+// --role defaults to worker for backward compatibility; reviewer and oracle
+// route through the assignments table only.
 func cmdAgentState(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("agent-state", flag.ContinueOnError)
 	fs.SetOutput(w)
 	stateFlag := fs.String("state", "", "Agent state (idle, running, stuck, done, dead)")
 	listFlag := fs.Bool("list", false, "List issues matching --state")
+	roleFlag := fs.String("role", string(RoleWorker), "Role (worker, reviewer, oracle)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *stateFlag == "" {
-		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead>\n       bl agent-state --state <state> --list")
+		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead> [--role worker|reviewer|oracle]\n       bl agent-state --state <state> --list")
 	}
 
 	state := AgentState(*stateFlag)
 	if !state.Valid() || state == "" {
 		return fmt.Errorf("invalid agent state: %q (valid: idle, running, stuck, done, dead)", *stateFlag)
+	}
+	role := Role(*roleFlag)
+	if !role.Valid() {
+		return fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", *roleFlag)
 	}
 
 	store, err := openStore()
@@ -1008,7 +1065,7 @@ func cmdAgentState(args []string, w io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead>")
+		return errors.New("usage: bl agent-state <id> --state <idle|running|stuck|done|dead> [--role worker|reviewer|oracle]")
 	}
 	id := remaining[0]
 
@@ -1019,11 +1076,11 @@ func cmdAgentState(args []string, w io.Writer) error {
 	}
 
 	now := time.Now()
-	if err := store.SetAgentState(id, state, &now); err != nil {
+	if err := store.SetRoleState(id, role, state, &now); err != nil {
 		return fmt.Errorf("failed to set agent state: %w", err)
 	}
 
-	fmt.Fprintf(w, "Updated %s agent_state=%s: %s\n", id, state, issue.Title)
+	fmt.Fprintf(w, "Updated %s [role=%s] state=%s: %s\n", id, role, state, issue.Title)
 	return nil
 }
 

@@ -28,6 +28,7 @@ type IssueExport struct {
 	AgentState     AgentState         `json:"agent_state,omitempty"`
 	LastActivity   *time.Time         `json:"last_activity,omitempty"`
 	Specifications []Spec             `json:"specifications,omitempty"`
+	Assignments    []Assignment       `json:"assignments,omitempty"`
 	Dependencies   []DependencyExport `json:"dependencies"`
 }
 
@@ -60,6 +61,7 @@ func toIssueExport(issue *Issue, deps []*Dependency) IssueExport {
 		AgentState:     issue.AgentState,
 		LastActivity:   issue.LastActivity,
 		Specifications: issue.Specifications,
+		Assignments:    issue.Assignments,
 		Dependencies:   make([]DependencyExport, len(deps)),
 	}
 	for i, dep := range deps {

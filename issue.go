@@ -97,6 +97,38 @@ func (a AgentState) Valid() bool {
 	}
 }
 
+// Role identifies which kind of agent is working on an issue.
+// A single issue may carry one assignment per role concurrently — a worker
+// implementing, a reviewer judging the diff, an oracle judging behaviour.
+type Role string
+
+const (
+	RoleWorker   Role = "worker"
+	RoleReviewer Role = "reviewer"
+	RoleOracle   Role = "oracle"
+)
+
+// Valid returns true if the role is one of the known agent kinds.
+func (r Role) Valid() bool {
+	switch r {
+	case RoleWorker, RoleReviewer, RoleOracle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Assignment is a (issue, role) tuple recording which agent currently
+// occupies that role on the issue and what state it is in.
+type Assignment struct {
+	IssueID      string     `json:"issue_id"`
+	Role         Role       `json:"role"`
+	Agent        string     `json:"agent"`
+	State        AgentState `json:"state"`
+	StartedAt    time.Time  `json:"started_at"`
+	LastActivity *time.Time `json:"last_activity,omitempty"`
+}
+
 // Spec is a single checkable requirement on an issue.
 // Specifications are stored as a JSON array in the database — they travel
 // with the issue and have no independent identity or cross-issue queries.
@@ -121,6 +153,10 @@ type Issue struct {
 	AgentState     AgentState `json:"agent_state,omitempty"`
 	LastActivity   *time.Time `json:"last_activity,omitempty"`
 	Specifications []Spec     `json:"specifications,omitempty"`
+	// Assignments lists every (role, agent, state) tuple currently attached to
+	// the issue. The worker assignment mirrors AssignedTo/AgentState above for
+	// backward compatibility; reviewer and oracle assignments live only here.
+	Assignments []Assignment `json:"assignments,omitempty"`
 }
 
 // SpecProgress returns the number of checked specs and total specs.

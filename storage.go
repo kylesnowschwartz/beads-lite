@@ -46,6 +46,16 @@ type Storage interface {
 	SetAgentState(issueID string, state AgentState, activity *time.Time) error
 	GetAgentsByState(state AgentState) ([]*Issue, error)
 
+	// Role-scoped assignments (worker / reviewer / oracle).
+	// ClaimRole atomically reserves a (issue, role) slot for an agent.
+	// Returns true if the claim succeeded, false if the slot is already
+	// held in a live state (running / stuck) by another agent.
+	ClaimRole(issueID string, role Role, agent string) (bool, error)
+	UnclaimRole(issueID string, role Role) error
+	SetRoleState(issueID string, role Role, state AgentState, activity *time.Time) error
+	GetAssignments(issueID string) ([]Assignment, error)
+	GetAllAssignments() (map[string][]Assignment, error)
+
 	// Dependencies
 	AddDependency(issueID, dependsOnID string, depType DepType) error
 	RemoveDependency(issueID, dependsOnID string, depType DepType) error
@@ -146,6 +156,19 @@ func (s *Store) initSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_deps_type ON dependencies(type, depends_on_id);
 	CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+
+	CREATE TABLE IF NOT EXISTS assignments (
+		issue_id TEXT NOT NULL,
+		role TEXT NOT NULL,
+		agent TEXT NOT NULL,
+		state TEXT NOT NULL DEFAULT 'idle',
+		started_at DATETIME NOT NULL,
+		last_activity DATETIME,
+		PRIMARY KEY (issue_id, role),
+		FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_assignments_state ON assignments(state);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("exec schema: %w", err)
@@ -170,6 +193,20 @@ func (s *Store) migrateSchema() error {
 	s.db.Exec("ALTER TABLE issues ADD COLUMN agent_state TEXT")
 	s.db.Exec("ALTER TABLE issues ADD COLUMN last_activity DATETIME")
 	s.db.Exec("ALTER TABLE issues ADD COLUMN specifications TEXT")
+
+	// Backfill assignments table from legacy issues columns. Idempotent: the
+	// PRIMARY KEY (issue_id, role) means re-running this on a database that
+	// already has worker rows is a no-op via INSERT OR IGNORE. The first
+	// invocation against an upgraded database copies any actively-claimed
+	// issue into a worker-role assignment so existing claims remain visible.
+	s.db.Exec(`
+		INSERT OR IGNORE INTO assignments (issue_id, role, agent, state, started_at, last_activity)
+		SELECT id, 'worker', assigned_to,
+		       COALESCE(NULLIF(agent_state, ''), 'idle'),
+		       updated_at, last_activity
+		FROM issues
+		WHERE assigned_to IS NOT NULL AND assigned_to != ''
+	`)
 
 	return nil
 }
@@ -208,6 +245,11 @@ func (s *Store) GetIssue(id string) (*Issue, error) {
 		return nil, ErrIssueNotFound
 	}
 	issue.Specifications = specsFromJSON(specsJSON)
+	if err == nil {
+		if assigns, aerr := s.GetAssignments(id); aerr == nil {
+			issue.Assignments = assigns
+		}
+	}
 	return issue, err
 }
 
@@ -298,7 +340,7 @@ func (s *Store) tryAutoCloseParent(childID string, now time.Time) (*AutoCloseRes
 	return &AutoCloseResult{ID: parentID, Title: title}, nil
 }
 
-// ListIssues returns all issues.
+// ListIssues returns all issues with their assignments populated.
 func (s *Store) ListIssues() ([]*Issue, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, description, status, priority, issue_type,
@@ -310,7 +352,12 @@ func (s *Store) ListIssues() ([]*Issue, error) {
 	}
 	defer rows.Close()
 
-	return scanIssues(rows)
+	issues, err := scanIssues(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.populateAssignments(issues)
+	return issues, nil
 }
 
 // AddDependency creates a dependency between two issues.
@@ -386,7 +433,12 @@ func (s *Store) GetReadyWork() ([]*Issue, error) {
 	}
 	defer rows.Close()
 
-	return scanIssues(rows)
+	issues, err := scanIssues(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.populateAssignments(issues)
+	return issues, nil
 }
 
 func scanIssues(rows *sql.Rows) ([]*Issue, error) {
@@ -404,6 +456,25 @@ func scanIssues(rows *sql.Rows) ([]*Issue, error) {
 		issues = append(issues, issue)
 	}
 	return issues, rows.Err()
+}
+
+// populateAssignments attaches each issue's assignments to its Assignments
+// slice. Single batch query — N+1 free. Best-effort: a query failure leaves
+// the slices empty rather than aborting, since assignment data is metadata,
+// not authoritative for issue identity.
+func (s *Store) populateAssignments(issues []*Issue) {
+	if len(issues) == 0 {
+		return
+	}
+	all, err := s.GetAllAssignments()
+	if err != nil {
+		return
+	}
+	for _, issue := range issues {
+		if rows, ok := all[issue.ID]; ok {
+			issue.Assignments = rows
+		}
+	}
 }
 
 // GetAllDependencies returns all dependencies in the database, keyed by issue_id.
@@ -428,32 +499,191 @@ func (s *Store) GetAllDependencies() (map[string][]*Dependency, error) {
 	return result, rows.Err()
 }
 
-// ClaimIssue atomically assigns an issue to an agent. Returns true if the claim
-// succeeded, false if already claimed by someone else. Uses BEGIN IMMEDIATE to
-// serialize concurrent claim attempts -- exactly one agent wins.
+// ClaimIssue atomically assigns an issue to a worker. Equivalent to
+// ClaimRole(id, RoleWorker, agent) plus the legacy side-effect of moving
+// the issue to status='doing' and writing assigned_to. Returns true if the
+// claim succeeded, false if the worker slot is already held in a live state.
+// Uses BEGIN IMMEDIATE to serialize concurrent claim attempts.
 func (s *Store) ClaimIssue(id, agent string) (bool, error) {
 	var claimed bool
 	err := s.WithTransaction(func() error {
-		result, err := s.db.Exec(`
-			UPDATE issues SET assigned_to = ?, status = 'doing', updated_at = ?
-			WHERE id = ? AND (assigned_to IS NULL OR assigned_to = '')`,
-			agent, time.Now(), id)
+		ok, err := s.claimRoleTx(id, RoleWorker, agent)
 		if err != nil {
 			return err
 		}
-		rows, _ := result.RowsAffected()
-		claimed = rows == 1
+		if !ok {
+			claimed = false
+			return nil
+		}
+		// Mirror to legacy columns so existing readers stay correct.
+		if _, err := s.db.Exec(`
+			UPDATE issues SET assigned_to = ?, status = 'doing', updated_at = ?
+			WHERE id = ?`, agent, time.Now(), id); err != nil {
+			return err
+		}
+		claimed = true
 		return nil
 	})
 	return claimed, err
 }
 
-// UnclaimIssue removes the assignment from an issue and resets it to todo.
+// UnclaimIssue removes the worker assignment from an issue and resets it
+// to todo. Mirrors UnclaimRole(id, RoleWorker) plus the legacy reset.
 func (s *Store) UnclaimIssue(id string) error {
+	return s.WithTransaction(func() error {
+		if _, err := s.db.Exec(`
+			DELETE FROM assignments WHERE issue_id = ? AND role = ?`,
+			id, RoleWorker); err != nil {
+			return err
+		}
+		_, err := s.db.Exec(`
+			UPDATE issues SET assigned_to = NULL, status = 'todo', updated_at = ?
+			WHERE id = ?`, time.Now(), id)
+		return err
+	})
+}
+
+// claimRoleTx is the inner-transaction body of ClaimRole and ClaimIssue.
+// Caller must already be inside WithTransaction. The PRIMARY KEY on
+// (issue_id, role) plus a state-aware upsert is the atomicity gate: a slot
+// can be reclaimed only when its previous occupant is idle/done/dead.
+func (s *Store) claimRoleTx(issueID string, role Role, agent string) (bool, error) {
+	if !role.Valid() {
+		return false, fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", role)
+	}
+	var existingState string
+	err := s.db.QueryRow(
+		"SELECT state FROM assignments WHERE issue_id = ? AND role = ?",
+		issueID, string(role),
+	).Scan(&existingState)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	// Live states block reclaim by another agent.
+	if err == nil && (existingState == string(AgentStateRunning) || existingState == string(AgentStateStuck)) {
+		return false, nil
+	}
+	now := time.Now()
+	if _, err := s.db.Exec(`
+		INSERT INTO assignments (issue_id, role, agent, state, started_at, last_activity)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(issue_id, role) DO UPDATE SET
+			agent = excluded.agent,
+			state = excluded.state,
+			started_at = excluded.started_at,
+			last_activity = excluded.last_activity`,
+		issueID, string(role), agent, string(AgentStateRunning), now, now); err != nil {
+		return false, fmt.Errorf("insert assignment: %w", err)
+	}
+	return true, nil
+}
+
+// ClaimRole atomically reserves a (issue, role) slot for an agent. Returns
+// true on success, false if the slot is held in a live state by someone else.
+// For RoleWorker, prefer ClaimIssue — it also updates the legacy columns.
+func (s *Store) ClaimRole(issueID string, role Role, agent string) (bool, error) {
+	var claimed bool
+	err := s.WithTransaction(func() error {
+		ok, err := s.claimRoleTx(issueID, role, agent)
+		if err != nil {
+			return err
+		}
+		claimed = ok
+		return nil
+	})
+	return claimed, err
+}
+
+// UnclaimRole removes a (issue, role) assignment outright. For RoleWorker,
+// also clears the legacy assigned_to column and resets status to todo so the
+// behaviour matches UnclaimIssue.
+func (s *Store) UnclaimRole(issueID string, role Role) error {
+	if !role.Valid() {
+		return fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", role)
+	}
+	if role == RoleWorker {
+		return s.UnclaimIssue(issueID)
+	}
 	_, err := s.db.Exec(`
-		UPDATE issues SET assigned_to = NULL, status = 'todo', updated_at = ?
-		WHERE id = ?`, time.Now(), id)
+		DELETE FROM assignments WHERE issue_id = ? AND role = ?`,
+		issueID, string(role))
 	return err
+}
+
+// SetRoleState updates the state and last_activity of an existing (issue, role)
+// assignment. For RoleWorker, also mirrors to the legacy issues.agent_state
+// column so consumers reading either source see the same value.
+func (s *Store) SetRoleState(issueID string, role Role, state AgentState, activity *time.Time) error {
+	if !role.Valid() {
+		return fmt.Errorf("invalid role: %q (valid: worker, reviewer, oracle)", role)
+	}
+	if !state.Valid() {
+		return fmt.Errorf("invalid agent state: %q (valid: idle, running, stuck, done, dead)", state)
+	}
+	return s.WithTransaction(func() error {
+		if _, err := s.db.Exec(`
+			UPDATE assignments SET state = ?, last_activity = ?
+			WHERE issue_id = ? AND role = ?`,
+			string(state), activity, issueID, string(role)); err != nil {
+			return fmt.Errorf("update assignment state: %w", err)
+		}
+		if role == RoleWorker {
+			if _, err := s.db.Exec(`
+				UPDATE issues SET agent_state = ?, last_activity = ?, updated_at = ?
+				WHERE id = ?`,
+				nilIfEmptyAgentState(state), activity, time.Now(), issueID); err != nil {
+				return fmt.Errorf("mirror agent_state: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+// GetAssignments returns every assignment row for one issue, ordered by role.
+func (s *Store) GetAssignments(issueID string) ([]Assignment, error) {
+	rows, err := s.db.Query(`
+		SELECT issue_id, role, agent, state, started_at, last_activity
+		FROM assignments WHERE issue_id = ?
+		ORDER BY role ASC`, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("query assignments: %w", err)
+	}
+	defer rows.Close()
+	return scanAssignments(rows)
+}
+
+// GetAllAssignments returns every assignment row in the database, keyed by
+// issue ID. Mirrors GetAllDependencies — single query, batch population.
+func (s *Store) GetAllAssignments() (map[string][]Assignment, error) {
+	rows, err := s.db.Query(`
+		SELECT issue_id, role, agent, state, started_at, last_activity
+		FROM assignments
+		ORDER BY issue_id ASC, role ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query all assignments: %w", err)
+	}
+	defer rows.Close()
+	all, err := scanAssignments(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]Assignment)
+	for _, a := range all {
+		out[a.IssueID] = append(out[a.IssueID], a)
+	}
+	return out, nil
+}
+
+func scanAssignments(rows *sql.Rows) ([]Assignment, error) {
+	var out []Assignment
+	for rows.Next() {
+		var a Assignment
+		if err := rows.Scan(&a.IssueID, &a.Role, &a.Agent, &a.State, &a.StartedAt, &a.LastActivity); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // nilIfEmpty returns nil for empty strings, allowing SQLite to store NULL
@@ -500,19 +730,13 @@ func specsFromJSON(s string) []Spec {
 	return specs
 }
 
-// SetAgentState updates the agent_state and last_activity for an issue.
+// SetAgentState updates the worker-role agent_state and last_activity for an
+// issue. Mirrors to both the legacy issues.agent_state column and the
+// assignments table so either reader sees consistent state. Equivalent to
+// SetRoleState(issueID, RoleWorker, state, activity).
 // activity may be nil to clear the timestamp; pass time.Now() for normal updates.
 func (s *Store) SetAgentState(issueID string, state AgentState, activity *time.Time) error {
-	if !state.Valid() {
-		return fmt.Errorf("invalid agent state: %q (valid: idle, running, stuck, done, dead)", state)
-	}
-	_, err := s.db.Exec(`
-		UPDATE issues SET agent_state = ?, last_activity = ?, updated_at = ?
-		WHERE id = ?`, nilIfEmptyAgentState(state), activity, time.Now(), issueID)
-	if err != nil {
-		return fmt.Errorf("set agent state: %w", err)
-	}
-	return nil
+	return s.SetRoleState(issueID, RoleWorker, state, activity)
 }
 
 // GetAgentsByState returns all issues with the given agent_state.
@@ -529,7 +753,12 @@ func (s *Store) GetAgentsByState(state AgentState) ([]*Issue, error) {
 	}
 	defer rows.Close()
 
-	return scanIssues(rows)
+	issues, err := scanIssues(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.populateAssignments(issues)
+	return issues, nil
 }
 
 // DeleteIssue removes an issue and all its dependencies from the database.

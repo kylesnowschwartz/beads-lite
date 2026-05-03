@@ -2695,8 +2695,8 @@ func TestCLI_AgentState_Set(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent-state set failed: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "agent_state=running") {
-		t.Errorf("expected agent_state=running in output, got: %s", out)
+	if !strings.Contains(out, "state=running") {
+		t.Errorf("expected state=running in output, got: %s", out)
 	}
 
 	// Show the issue to confirm the state persisted
